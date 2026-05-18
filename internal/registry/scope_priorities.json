@@ -440,6 +440,11 @@
     "recommend": "true"
   },
   {
+    "scope_name": "slides:presentation:screenshot",
+    "final_score": "78.7030",
+    "recommend": "true"
+  },
+  {
     "scope_name": "slides:presentation:create",
     "final_score": "79.4755",
     "recommend": "true"
