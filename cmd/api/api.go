@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/internal/client"
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/internal/core"
@@ -123,7 +124,13 @@ func buildAPIRequest(opts *APIOptions) (client.RawApiRequest, *cmdutil.FileUploa
 
 	// stdin conflict: --params and --data cannot both read from stdin, regardless of --file.
 	if opts.Params == "-" && opts.Data == "-" {
-		return client.RawApiRequest{}, nil, output.ErrValidation("--params and --data cannot both read from stdin (-)")
+		return client.RawApiRequest{}, nil, errs.NewValidationError(errs.SubtypeInvalidArgument,
+			"--params and --data cannot both read from stdin (-)").
+			WithHint("pass at most one flag as '-'; give the other inline JSON or @file").
+			WithParams(
+				errs.InvalidParam{Name: "--params", Reason: "reads from stdin (-)"},
+				errs.InvalidParam{Name: "--data", Reason: "reads from stdin (-)"},
+			)
 	}
 
 	params, err := cmdutil.ParseJSONMap(opts.Params, "--params", stdin, fileIO)
@@ -153,7 +160,10 @@ func buildAPIRequest(opts *APIOptions) (client.RawApiRequest, *cmdutil.FileUploa
 				return client.RawApiRequest{}, nil, err
 			}
 			if _, ok := dataFields.(map[string]any); !ok {
-				return client.RawApiRequest{}, nil, output.ErrValidation("--data must be a JSON object when used with --file")
+				return client.RawApiRequest{}, nil, errs.NewValidationError(errs.SubtypeInvalidArgument,
+					"--data must be a JSON object when used with --file").
+					WithHint(`with --file, --data carries multipart form fields, e.g. --data '{"image_type":"message"}'`).
+					WithParam("--data")
 			}
 		}
 
@@ -196,7 +206,13 @@ func apiRun(opts *APIOptions) error {
 	}
 
 	if opts.PageAll && opts.Output != "" {
-		return output.ErrValidation("--output and --page-all are mutually exclusive")
+		return errs.NewValidationError(errs.SubtypeInvalidArgument,
+			"--output and --page-all are mutually exclusive").
+			WithHint("drop --page-all to save a binary response, or drop --output to paginate JSON").
+			WithParams(
+				errs.InvalidParam{Name: "--output", Reason: "conflicts with --page-all"},
+				errs.InvalidParam{Name: "--page-all", Reason: "conflicts with --output"},
+			)
 	}
 	if err := output.ValidateJqFlags(opts.JqExpr, opts.Output, opts.Format); err != nil {
 		return err
@@ -239,11 +255,11 @@ func apiRun(opts *APIOptions) error {
 
 	resp, err := ac.DoAPI(opts.Ctx, request)
 	if err != nil {
-		// MarkRaw tells the dispatcher to skip the legacy enrichPermissionError
-		// pass on *output.ExitError values. Typed *errs.* errors that flow
-		// through here keep their canonical message / hint from BuildAPIError;
-		// MarkRaw is a no-op on those (it only flips a flag on *ExitError).
-		return output.MarkRaw(err)
+		// MarkRaw tells the dispatcher to skip hint enrichment so the typed
+		// error keeps its canonical message / hint from BuildAPIError: the
+		// `api` command is a passthrough surface and the caller wants the
+		// original Lark response wording, not a locally enriched variant.
+		return errs.MarkRaw(err)
 	}
 	err = client.HandleResponse(resp, client.ResponseOptions{
 		OutputPath:  opts.Output,
@@ -260,10 +276,10 @@ func apiRun(opts *APIOptions) error {
 		// the client populate identity-aware fields (ConsoleURL etc.).
 		CheckError: ac.CheckResponse,
 	})
-	// MarkRaw: see comment above on the DoAPI path. Skips legacy
-	// *ExitError enrichment; typed errors flow through unchanged.
+	// MarkRaw: see comment above on the DoAPI path. Skips dispatcher hint
+	// enrichment; the typed error's own message / hint flow through unchanged.
 	if err != nil {
-		return output.MarkRaw(err)
+		return errs.MarkRaw(err)
 	}
 	return nil
 }
@@ -279,7 +295,7 @@ func apiPaginate(ctx context.Context, ac *client.APIClient, request client.RawAp
 	// When jq is set, always aggregate all pages then filter.
 	if jqExpr != "" {
 		if err := client.PaginateWithJq(ctx, ac, request, jqExpr, out, pagOpts, ac.CheckResponse); err != nil {
-			return output.MarkRaw(err)
+			return errs.MarkRaw(err)
 		}
 		return nil
 	}
@@ -291,11 +307,11 @@ func apiPaginate(ctx context.Context, ac *client.APIClient, request client.RawAp
 			pf.FormatPage(items)
 		}, pagOpts)
 		if err != nil {
-			return output.MarkRaw(err)
+			return errs.MarkRaw(err)
 		}
 		if apiErr := ac.CheckResponse(result, pagOpts.Identity); apiErr != nil {
 			output.FormatValue(out, result, output.FormatJSON)
-			return output.MarkRaw(apiErr)
+			return errs.MarkRaw(apiErr)
 		}
 		if !hasItems {
 			fmt.Fprintf(errOut, "warning: this API does not return a list, format %q is not supported, falling back to json\n", format)
@@ -305,11 +321,11 @@ func apiPaginate(ctx context.Context, ac *client.APIClient, request client.RawAp
 	default:
 		result, err := ac.PaginateAll(ctx, request, pagOpts)
 		if err != nil {
-			return output.MarkRaw(err)
+			return errs.MarkRaw(err)
 		}
 		if apiErr := ac.CheckResponse(result, pagOpts.Identity); apiErr != nil {
 			output.FormatValue(out, result, output.FormatJSON)
-			return output.MarkRaw(apiErr)
+			return errs.MarkRaw(apiErr)
 		}
 		output.FormatValue(out, result, format)
 		return nil

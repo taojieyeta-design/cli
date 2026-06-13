@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/larksuite/cli/errs"
 	extcs "github.com/larksuite/cli/extension/contentsafety"
 )
 
@@ -35,19 +36,15 @@ func ScanForSafety(cmdPath string, data any, errOut io.Writer) ScanResult {
 	return ScanResult{Alert: alert}
 }
 
-// wrapBlockError creates an ExitError for content-safety block.
+// wrapBlockError creates a typed content-safety error for a block-mode alert.
 func wrapBlockError(alert *extcs.Alert) error {
-	rules := ""
+	var rules []string
 	if alert != nil {
-		rules = strings.Join(alert.MatchedRules, ", ")
+		rules = alert.MatchedRules
 	}
-	return &ExitError{
-		Code: ExitContentSafety,
-		Detail: &ErrDetail{
-			Type:    "content_safety_blocked",
-			Message: fmt.Sprintf("content safety violation detected (rules: %s)", rules),
-		},
-	}
+	e := errs.NewContentSafetyError(errs.SubtypeUnknown, "content safety violation detected (rules: %s)", strings.Join(rules, ", "))
+	e.Rules = rules
+	return e
 }
 
 // WriteAlertWarning writes a human-readable content-safety warning to w.

@@ -13,6 +13,7 @@ import (
 	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/internal/core"
+	"github.com/larksuite/cli/internal/errclass"
 	"github.com/larksuite/cli/internal/httpmock"
 	"github.com/spf13/cobra"
 )
@@ -250,6 +251,28 @@ func TestApiCmd_ParamsAndDataBothStdinConflict(t *testing.T) {
 	if !strings.Contains(err.Error(), "cannot both read from stdin") {
 		t.Errorf("expected stdin conflict error, got: %v", err)
 	}
+	var ve *errs.ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected *errs.ValidationError, got %T: %v", err, err)
+	}
+	if ve.Subtype != errs.SubtypeInvalidArgument {
+		t.Errorf("Subtype = %q, want %q", ve.Subtype, errs.SubtypeInvalidArgument)
+	}
+	requireInvalidParamNames(t, ve, "--params", "--data")
+}
+
+// requireInvalidParamNames asserts that ve.Params carries exactly the given
+// flag names (order-sensitive, mirroring declaration order at the call site).
+func requireInvalidParamNames(t *testing.T, ve *errs.ValidationError, names ...string) {
+	t.Helper()
+	if len(ve.Params) != len(names) {
+		t.Fatalf("Params = %+v, want %d entries %v", ve.Params, len(names), names)
+	}
+	for i, name := range names {
+		if ve.Params[i].Name != name {
+			t.Errorf("Params[%d].Name = %q, want %q", i, ve.Params[i].Name, name)
+		}
+	}
 }
 
 func TestApiCmd_OutputAndPageAllConflict(t *testing.T) {
@@ -269,6 +292,41 @@ func TestApiCmd_OutputAndPageAllConflict(t *testing.T) {
 	}
 	if gotOpts != nil && !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("expected 'mutually exclusive' error, got: %v", err)
+	}
+	var ve *errs.ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected *errs.ValidationError, got %T: %v", err, err)
+	}
+	if ve.Subtype != errs.SubtypeInvalidArgument {
+		t.Errorf("Subtype = %q, want %q", ve.Subtype, errs.SubtypeInvalidArgument)
+	}
+	requireInvalidParamNames(t, ve, "--output", "--page-all")
+}
+
+// TestApiCmd_FileDataNotObject_TypedValidation pins the typed envelope for
+// the --file + non-object --data rejection: *errs.ValidationError with
+// subtype invalid_argument and the offending flag on Param.
+func TestApiCmd_FileDataNotObject_TypedValidation(t *testing.T) {
+	f, _, _, _ := cmdutil.TestFactory(t, &core.CliConfig{
+		AppID: "test-app", AppSecret: "test-secret", Brand: core.BrandFeishu,
+	})
+	cmd := NewCmdApi(f, func(opts *APIOptions) error {
+		return apiRun(opts)
+	})
+	cmd.SetArgs([]string{"POST", "/open-apis/test", "--as", "bot", "--file", "photo.jpg", "--data", `["not-an-object"]`})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for non-object --data with --file")
+	}
+	var ve *errs.ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected *errs.ValidationError, got %T: %v", err, err)
+	}
+	if ve.Subtype != errs.SubtypeInvalidArgument {
+		t.Errorf("Subtype = %q, want %q", ve.Subtype, errs.SubtypeInvalidArgument)
+	}
+	if ve.Param != "--data" {
+		t.Errorf("Param = %q, want %q", ve.Param, "--data")
 	}
 }
 
@@ -359,6 +417,11 @@ func TestApiCmd_PageAll_NonBatchAPI_ErrorStillOutputsJSON(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "no permission") {
 		t.Errorf("expected error message in stdout, got: %s", stdout.String())
+	}
+	// --page-all errors are raw passthrough: the dispatcher must not rewrite
+	// the message / hint with local enrichment.
+	if !errs.IsRaw(err) {
+		t.Errorf("expected --page-all error to be marked raw, got %T: %v", err, err)
 	}
 }
 
@@ -734,6 +797,64 @@ func TestApiCmd_PermissionError_DerivesFirstClassFields(t *testing.T) {
 	}
 	if pe.LogID != "20260527-test-log" {
 		t.Errorf("LogID = %q, want %q", pe.LogID, "20260527-test-log")
+	}
+}
+
+// TestApiCmd_APIError_RawPassthrough pins the raw-passthrough contract of the
+// `api` command: errors returned to the dispatcher are marked raw via
+// errs.MarkRaw, so the dispatcher skips hint enrichment and the message /
+// hint stay exactly what errclass.BuildAPIError derived from the Lark
+// response at classification time — nothing in the api command path rewrites
+// them afterwards.
+func TestApiCmd_APIError_RawPassthrough(t *testing.T) {
+	f, _, _, reg := cmdutil.TestFactory(t, &core.CliConfig{
+		AppID: "cli_test_raw", AppSecret: "secret", Brand: core.BrandFeishu,
+	})
+
+	respBody := map[string]interface{}{
+		"code": 99991679,
+		"msg":  "scope missing",
+	}
+	reg.Register(&httpmock.Stub{
+		URL:  "/open-apis/docx/v1/documents/raw",
+		Body: respBody,
+	})
+
+	cmd := NewCmdApi(f, nil)
+	cmd.SetArgs([]string{"GET", "/open-apis/docx/v1/documents/raw", "--as", "bot"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for non-zero code")
+	}
+
+	if !errs.IsRaw(err) {
+		t.Fatalf("expected error to be marked raw (errs.IsRaw), got %T: %v", err, err)
+	}
+	// The raw marker must not hide the typed error from the envelope writer.
+	var pe *errs.PermissionError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *errs.PermissionError through the raw marker, got %T: %v", err, err)
+	}
+
+	// Canonical baseline: classify the same response body the same way
+	// CheckResponse does. Message and hint surfaced by the command must equal
+	// the classification-time values byte for byte.
+	canonical := errclass.BuildAPIError(respBody, errclass.ClassifyContext{
+		Brand: "feishu", AppID: "cli_test_raw", Identity: "bot",
+	})
+	var want *errs.PermissionError
+	if !errors.As(canonical, &want) {
+		t.Fatalf("expected canonical *errs.PermissionError, got %T: %v", canonical, canonical)
+	}
+	if pe.Message != want.Message {
+		t.Errorf("Message = %q, want canonical %q (raw mode must not rewrite it)", pe.Message, want.Message)
+	}
+	if pe.Hint != want.Hint {
+		t.Errorf("Hint = %q, want canonical %q (raw mode must not rewrite it)", pe.Hint, want.Hint)
+	}
+	// The dispatcher-side scope enrichment string must never appear in raw mode.
+	if strings.Contains(pe.Hint, "current command requires scope(s)") {
+		t.Errorf("hint was rewritten by enrichment in raw mode: %q", pe.Hint)
 	}
 }
 

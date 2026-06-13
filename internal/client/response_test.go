@@ -325,6 +325,32 @@ func TestHandleResponse_NonJSONError_502(t *testing.T) {
 	}
 }
 
+// TestHandleResponse_JSONErrorWithZeroBodyCodeNotSwallowed pins that an HTTP
+// status error whose JSON body omits a non-zero business code (e.g. 400 +
+// {"code":0,...}) still surfaces a typed error. CheckResponse treats code 0 as
+// success, so without the HTTP-status fallback a 4xx would be served as a
+// successful result and exit 0.
+func TestHandleResponse_JSONErrorWithZeroBodyCodeNotSwallowed(t *testing.T) {
+	resp := newApiRespWithStatus(400, []byte(`{"code":0,"msg":"bad request"}`),
+		map[string]string{"Content-Type": "application/json"})
+
+	var out, errOut bytes.Buffer
+	err := HandleResponse(resp, ResponseOptions{Out: &out, ErrOut: &errOut, FileIO: &localfileio.LocalFileIO{}})
+	if err == nil {
+		t.Fatalf("HTTP 400 with code:0 body must not be swallowed; got out=%q err=nil", out.String())
+	}
+	var apiErr *errs.APIError
+	if !errors.As(err, &apiErr) {
+		t.Errorf("expected *errs.APIError, got %T", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 400") {
+		t.Errorf("expected 'HTTP 400' in error, got: %s", err.Error())
+	}
+	if output.ExitCodeOf(err) != output.ExitAPI {
+		t.Errorf("expected ExitAPI (%d), got %d", output.ExitAPI, output.ExitCodeOf(err))
+	}
+}
+
 func TestHandleResponse_200TextPlain_SavesFile(t *testing.T) {
 	dir := t.TempDir()
 	origWd, _ := os.Getwd()

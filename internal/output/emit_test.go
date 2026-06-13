@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/larksuite/cli/errs"
 	extcs "github.com/larksuite/cli/extension/contentsafety"
 )
 
@@ -72,12 +73,15 @@ func TestScanForSafety_ModeBlock_WithAlert(t *testing.T) {
 	if result.BlockErr == nil {
 		t.Error("block mode with alert should have BlockErr")
 	}
-	var exitErr *ExitError
-	if !errors.As(result.BlockErr, &exitErr) {
-		t.Fatalf("BlockErr should be *ExitError, got %T", result.BlockErr)
+	var csErr *errs.ContentSafetyError
+	if !errors.As(result.BlockErr, &csErr) {
+		t.Fatalf("BlockErr should be *errs.ContentSafetyError, got %T", result.BlockErr)
 	}
-	if exitErr.Code != ExitContentSafety {
-		t.Errorf("exit code = %d, want %d", exitErr.Code, ExitContentSafety)
+	if got := ExitCodeOf(result.BlockErr); got != ExitContentSafety {
+		t.Errorf("exit code = %d, want %d", got, ExitContentSafety)
+	}
+	if len(csErr.Rules) != 1 || csErr.Rules[0] != "r1" {
+		t.Errorf("rules = %v, want [r1]", csErr.Rules)
 	}
 }
 

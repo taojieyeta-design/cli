@@ -81,9 +81,13 @@ func ScanRepo(root string) ([]Violation, error) {
 			return walkErr
 		}
 		if d.IsDir() {
-			// Skip well-known noise directories.
 			name := d.Name()
-			if name == ".git" || name == "node_modules" || name == "vendor" ||
+			// Skip hidden dirs (.git, .claude/worktrees, …): gitignored tooling
+			// state, not repo source. The walk root itself is exempt.
+			if path != root && strings.HasPrefix(name, ".") {
+				return filepath.SkipDir
+			}
+			if name == "node_modules" || name == "vendor" ||
 				name == "tests_e2e" || name == "skill-template" || name == "skills" ||
 				name == "docs" || name == "specs" {
 				return filepath.SkipDir

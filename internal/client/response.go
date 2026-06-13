@@ -89,6 +89,24 @@ func HandleResponse(resp *larkcore.ApiResp, opts ResponseOptions) error {
 		if apiErr := check(result, identity); apiErr != nil {
 			return apiErr
 		}
+		// CheckResponse treats business code 0 as success, so a 4xx/5xx whose
+		// JSON body omits a non-zero code would otherwise be served as a
+		// successful result. Classify by HTTP status, mirroring the non-JSON
+		// branch above, so the status error is never swallowed.
+		if resp.StatusCode >= 400 {
+			body := util.TruncateStrWithEllipsis(strings.TrimSpace(string(resp.RawBody)), 500)
+			if resp.StatusCode >= 500 {
+				return errs.NewNetworkError(errs.SubtypeNetworkServer,
+					"HTTP %d: %s", resp.StatusCode, body).
+					WithCode(resp.StatusCode)
+			}
+			subtype := errs.SubtypeUnknown
+			if resp.StatusCode == 404 {
+				subtype = errs.SubtypeNotFound
+			}
+			return errs.NewAPIError(subtype, "HTTP %d: %s", resp.StatusCode, body).
+				WithCode(resp.StatusCode)
+		}
 		// Content safety scanning
 		scanResult := output.ScanForSafety(opts.CommandPath, result, opts.ErrOut)
 		if scanResult.Blocked {

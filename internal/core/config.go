@@ -5,15 +5,14 @@ package core
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/internal/i18n"
 	"github.com/larksuite/cli/internal/keychain"
-	"github.com/larksuite/cli/internal/output"
 	"github.com/larksuite/cli/internal/validate"
 	"github.com/larksuite/cli/internal/vfs"
 )
@@ -237,28 +236,26 @@ func RequireConfigForProfile(kc keychain.KeychainAccess, profileOverride string)
 func ResolveConfigFromMulti(raw *MultiAppConfig, kc keychain.KeychainAccess, profileOverride string) (*CliConfig, error) {
 	app := raw.CurrentAppConfig(profileOverride)
 	if app == nil {
-		return nil, &ConfigError{
-			Code:    3,
-			Type:    "config",
-			Message: fmt.Sprintf("profile %q not found", profileOverride),
-			Hint:    fmt.Sprintf("available profiles: %s", formatProfileNames(raw.ProfileNames())),
-		}
+		return nil, errs.NewConfigError(errs.SubtypeNotConfigured, "profile %q not found", profileOverride).
+			WithHint("available profiles: %s", formatProfileNames(raw.ProfileNames()))
 	}
 
 	if err := ValidateSecretKeyMatch(app.AppId, app.AppSecret); err != nil {
-		return nil, &ConfigError{Code: 3, Type: "config",
-			Message: "appId and appSecret keychain key are out of sync",
-			Hint:    err.Error()}
+		return nil, errs.NewConfigError(errs.SubtypeNotConfigured, "appId and appSecret keychain key are out of sync").
+			WithHint("%s", err.Error()).
+			WithCause(err)
 	}
 
 	secret, err := ResolveSecretInput(app.AppSecret, kc)
 	if err != nil {
-		// Deprecated: legacy *output.ExitError passthrough; removed after typed migration.
-		var exitErr *output.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, exitErr
+		if errs.IsTyped(err) {
+			return nil, err
 		}
-		return nil, &ConfigError{Code: 3, Type: "config", Message: err.Error()}
+		subtype := errs.SubtypeNotConfigured
+		if isMalformedConfigError(err) {
+			subtype = errs.SubtypeInvalidConfig
+		}
+		return nil, errs.NewConfigError(subtype, "%s", err.Error()).WithCause(err)
 	}
 	cfg := &CliConfig{
 		ProfileName: app.ProfileName(),
@@ -287,7 +284,8 @@ func RequireAuthForProfile(kc keychain.KeychainAccess, profileOverride string) (
 		return nil, err
 	}
 	if cfg.UserOpenId == "" {
-		return nil, &ConfigError{Code: 3, Type: "auth", Message: "not logged in", Hint: "run `lark-cli auth login` in the background. It blocks and outputs a verification URL — retrieve the URL and open it in a browser to complete login."}
+		return nil, errs.NewAuthenticationError(errs.SubtypeTokenMissing, "not logged in").
+			WithHint("run `lark-cli auth login` in the background. It blocks and outputs a verification URL — retrieve the URL and open it in a browser to complete login.")
 	}
 	return cfg, nil
 }
