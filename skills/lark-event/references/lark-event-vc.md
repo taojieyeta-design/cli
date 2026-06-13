@@ -2,31 +2,41 @@
 
 > **Prerequisite:** Read [`../SKILL.md`](../SKILL.md) first for the `event consume` essentials (commands, subprocess contract, jq usage).
 
-## Key catalog (2)
+## Key catalog (4)
 
 | EventKey | Purpose |
 |---|---|
+| `vc.meeting.participant_meeting_started_v1` | A meeting the current user participates in has started |
+| `vc.meeting.participant_meeting_joined_v1` | The current user has joined a meeting |
 | `vc.meeting.participant_meeting_ended_v1` | A meeting the current user participates in has ended |
 | `vc.note.generated_v1` | A note has been generated (meeting, recording, upload, etc.) |
 
-Both keys use a **Custom schema** (flat output) and carry a **PreConsume hook** that auto-subscribes / unsubscribes via OAPI on first / last consumer. Both require `--as user`.
+All four keys use a **Custom schema** (flat output) and carry a **PreConsume hook** that auto-subscribes / unsubscribes via OAPI on first / last consumer. All require `--as user`.
 
 ## Scopes & auth
 
 | EventKey | Scope | Auth |
 |---|---|---|
+| `vc.meeting.participant_meeting_started_v1` | `vc:meeting.meetingevent:read` | user |
+| `vc.meeting.participant_meeting_joined_v1` | `vc:meeting.meetingevent:read` | user |
 | `vc.meeting.participant_meeting_ended_v1` | `vc:meeting.meetingevent:read` | user |
 | `vc.note.generated_v1` | `vc:note:read` | user |
 
 ---
 
-## `vc.meeting.participant_meeting_ended_v1`
+## Meeting participant events
+
+Covered keys:
+
+- `vc.meeting.participant_meeting_started_v1`
+- `vc.meeting.participant_meeting_joined_v1`
+- `vc.meeting.participant_meeting_ended_v1`
 
 ### Output fields
 
 | Field | Type | Description |
 |---|---|---|
-| `type` | string | Event type; always `vc.meeting.participant_meeting_ended_v1` |
+| `type` | string | Event type; one of the covered meeting participant EventKeys |
 | `event_id` | string | Globally unique event ID; safe for deduplication |
 | `timestamp` | string (timestamp_ms) | Event delivery time (ms timestamp string) |
 | `meeting_id` | string | Meeting ID |
@@ -44,6 +54,8 @@ Both keys use a **Custom schema** (flat output) and carry a **PreConsume hook** 
 ### Example
 
 ```bash
+lark-cli event consume vc.meeting.participant_meeting_started_v1 --as user
+lark-cli event consume vc.meeting.participant_meeting_joined_v1 --as user
 lark-cli event consume vc.meeting.participant_meeting_ended_v1 --as user
 
 # Project meeting topic and end time only
