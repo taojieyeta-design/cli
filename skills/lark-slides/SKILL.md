@@ -14,7 +14,7 @@ metadata:
 
 | 用户需求 | 优先动作 | 关键文档 / 命令 |
 |----------|----------|-----------------|
-| 新建 PPT | 先规划 `slide_plan.json`，再按复杂度选择一步或两步创建 | `planning-layer.md`、`visual-planning.md`、`asset-planning.md`、`slides +create` |
+| 新建 PPT | 先解析并盘点用户附件，规划 `slide_plan.json`，再按复杂度选择一步或两步创建 | `planning-layer.md`、`visual-planning.md`、`asset-planning.md`、`slides +create` |
 | 大幅改写页面 | 先回读现有 XML，写入新 plan，再替换或重建相关页面 | `xml_presentations.get`、`+replace-slide`、`lark-slides-edit-workflows.md` |
 | 编辑单个标题、文本块、图片或局部元素 | 优先块级替换/插入，不改页序 | `slides +replace-slide`、`lark-slides-replace-slide.md` |
 | 读取或分析已有 PPT | 解析 slides/wiki token，回读全文或单页 XML，保存 `xml_presentation_id`、`slide_id`、`revision_id` | `xml_presentations.get`、`xml_presentation.slide.get` |
@@ -113,9 +113,10 @@ python3 skills/lark-slides/scripts/template_tool.py extract --template <template
 Step 1: 需求澄清 & 读取知识
   - 澄清主题、受众、页数、风格；模板需求按“模板与脚本优先流程”处理
   - 读取 xml-schema-quick-ref.md；新建 / 大幅改写时还要读取 planning-layer.md、visual-planning.md、asset-planning.md
+  - 如果用户提供附件、文件路径、素材目录或类似“附件文件路径：...”的文本，先按 asset-planning.md 解析路径、枚举文件、读取/导入/上传可用素材；不要直接跳到大纲或 XML
 
 Step 2: 生成大纲 → 用户确认 → 写入 slide_plan.json
-  - 生成结构化大纲供用户确认；如使用模板，标明基于哪个模板改写
+  - 生成结构化大纲供用户确认；如使用用户附件、导入后的参考 slides 或模板，标明每类素材如何参与二次创作
   - 新建 / 大幅改写必须先创建目录并写入 `.lark-slides/plan/<deck-or-task-id>/slide_plan.json`
   - plan 字段、路径命名、模板边界和 `asset_need` 结构按 planning-layer.md / asset-planning.md 执行
 

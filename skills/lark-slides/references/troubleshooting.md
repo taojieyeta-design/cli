@@ -23,6 +23,11 @@
 6. 如果使用 `--slides '[...]'`，怀疑 shell 截断时直接切到两步创建：先 `slides +create`，再用 `xml_presentation.slide.create` 逐页添加。
 7. 局部问题用 `+replace-slide` 块级修正；整页结构要改时再用 `slide.delete` 旧页 + `slide.create` 新页。
 
+## Imported Slides And Media Tokens
+
+- 由 `drive +import --type slides` 导入生成的页面，可能可读、可截图，但不保证支持后续 `+replace-slide` / `xml_presentation.slide.replace` 的块级编辑。遇到导入页块级编辑失败时，先回读确认内容；需要重做结构时，优先新建 XML-native 页面或重建对应页，而不是反复尝试块级替换。
+- 一个演示文稿中的图片 `file_token` 不能直接复用于另一个新建演示文稿。跨文稿复用图片时必须在目标演示文稿重新上传，或在 `+create --slides` 中使用 `@./relative/path` 占位符让 CLI 为新文稿上传并替换 token。
+
 ## Symptom Fixes
 
 | 看到的问题 | 处理方式 |
@@ -35,7 +40,9 @@
 | 图表没有显示 | 检查 `chartPlotArea` 和 `chartData` 是否都包含，`dim1` / `dim2` 数据数量是否匹配 |
 | 图片被裁掉一部分 | `<img>` 的 `width` / `height` 是裁剪后尺寸；要整图显示就让 `width:height` 对齐原图比例 |
 | 图片不显示 / `<img src>` 仍是 `@path` | `@` 占位符只在 `+create --slides` 中替换；直接调 `xml_presentation.slide.create` 必须先用 `+media-upload` 拿 `file_token` |
+| 新文稿里复用旧文稿的图片 `file_token` 后图片不显示 | `file_token` 不能跨演示文稿复用；在目标文稿重新 `+media-upload`，或新建时使用 `@./relative/path` 占位符 |
 | 新插入的 `<img>` 挡住原有元素 | `slide.get` 读原页，对照已有块坐标挑空白位置；空间不够就在同一批 `--parts` 里先移动/缩小现有块再插图 |
+| 导入的 PPTX/PDF 页面可读但 `+replace-slide` / `slide.replace` 失败 | 导入页不保证支持块级编辑；改为重建该页或新建 XML-native 页面，再删除/替换旧页 |
 | 渐变背景变成白色 | 渐变必须用 `rgba()` 格式 + 百分比停靠点，如 `linear-gradient(135deg,rgba(30,60,114,1) 0%,rgba(59,130,246,1) 100%)` |
 | 整体风格不统一 | 封面页和结尾页用同一背景，内容页保持一致的配色和字号体系 |
 

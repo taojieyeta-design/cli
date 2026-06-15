@@ -7,7 +7,7 @@
 ## Required Flow
 
 1. 理解用户需求，必要时澄清主题、受众、页数、风格。
-2. 激活素材处理层：按 `asset-planning.md` 盘点用户提供的本地素材、可引用链接和缺口素材；本地素材优先，没有合适本地素材时再使用内置模板或联网搜索。
+2. 激活素材处理层：按 `asset-planning.md` 解析 prompt 中的附件路径、素材目录、上传文件名和链接，盘点用户提供的本地素材、可引用链接和缺口素材；本地素材优先，没有合适本地素材时再使用内置模板或联网搜索。
 3. 选择唯一 plan 目录：`.lark-slides/plan/<deck-or-task-id>/`。
 4. 先创建目录：`mkdir -p .lark-slides/plan/<deck-or-task-id>`。
 5. 写入 `.lark-slides/plan/<deck-or-task-id>/slide_plan.json`。
@@ -17,7 +17,11 @@
 
 素材和模板不能代替 plan。素材处理层只能影响背景理解、`theme_style`、`visual_system`、页面流、文案输入、布局选择和局部视觉骨架；最终仍必须有 `.lark-slides/plan/<deck-or-task-id>/slide_plan.json`。
 
-如果用户提供 `.pptx` 或 `.pdf`，并称其为 PPT 模板、幻灯片模板、版式/风格参考，先按 `lark-drive` 的 `drive +import --type slides` 导入为在线 slides，在这个slides上进行内容二次创作。
+如果用户提供 `.pptx` 或 `.pdf`，并称其为 PPT 模板、幻灯片模板、版式/风格参考，先按 `lark-drive` 的 `drive +import --type slides` 导入为在线 slides，在这个 slides 上进行内容二次创作。导入是写操作；用户已经明确要求“根据该附件生成/改写 PPT”时可视为已有意图，否则先确认。
+
+如果用户提供 `.pptx`，并要求“在此基础上修改 / 调整布局 / 美化 / 精简 / 增加目录 / 内容不用改 / 不要随便修改内容 / 保留框架 / 已有一版 PPT”，该文件是 `rewrite_source`，不是普通模板。导入并回读 XML 后，`slide_plan.json` 必须逐页记录原稿内容的保留、精简、新增和重排策略；不得直接新生成一套脱离原稿的页面。
+
+不要把附件路径只当作 prompt 文本。像 `附件文件路径：path/to/report.docx` 这样的路径必须解析到真实文件；相对路径按当前工作目录和用户明确给出的素材根目录解析，不能硬编码某个固定附件目录。
 
 ## Plan Path
 
@@ -65,6 +69,7 @@ Exception:
     "inputs": [
       {
         "source": "./reference.pdf",
+        "resolved_path": "./reference.pdf",
         "kind": "style_reference",
         "usage": "Import as slides, then extract page flow, palette, typography hierarchy, and reusable motif.",
         "status": "available"
@@ -207,6 +212,20 @@ Local materials are preferred over remote search. Common material roles:
 - `visual_asset`: images, screenshots, logos, icons, charts, diagrams, or figures that may appear on slides.
 - `copy_source`: text, outline, notes, PRD, report, or transcript used as content input.
 - `data_source`: tables, CSV/XLSX, metrics, or structured values used for charts or tables.
+- `rewrite_source`: existing PPT/PDF/slides that should be preserved, refined, condensed, expanded, or reorganized rather than treated as a loose style reference.
+
+Before planning slide pages, resolve all attachment paths and write them into `material_inventory.inputs`. Each available local input should include:
+
+- `source`: the original user-provided path or file label.
+- `resolved_path`: the actual local path that exists, preferably relative to the CWD when usable by `lark-cli`.
+- `kind`: one or more material roles.
+- `usage`: how it will affect narrative, visuals, data, or style.
+- `status`: `available`, `imported`, `uploaded`, `read`, `skipped`, or `missing`.
+- `notes`: optional mapping details, such as "user-provided relative path resolved under the supplied material directory".
+
+If an attachment is a template/style deck or PDF and is imported as online slides, also record `imported_xml_presentation_id` or `import_ticket` when known, then use the imported XML as a `style_reference`.
+
+If an attachment is a `rewrite_source`, each affected slide plan should mention the source page or source section and the intended operation: `preserve`, `condense`, `expand`, `reorder`, `restyle`, or `replace_visual_only`. For "content unchanged" requests, use `replace_visual_only` or `restyle` by default and keep original claims, numbers, names, and page intent intact.
 
 If a local `.pdf` / `.pptx` is a style reference, use `lark-drive` to import it as online slides and then use `xml_presentations.get` to read the XML before planning. This is a write operation and requires user intent. Extract design language only by default; do not copy source text unless the user asks.
 
