@@ -7,15 +7,17 @@
 ## Required Flow
 
 1. 理解用户需求，必要时澄清主题、受众、页数、风格。
-2. 如果适合模板，先用 `template_tool.py search` 检索，锁定模板后用 `summarize` 获取主题和页型信息。
+2. 激活素材处理层：按 `asset-planning.md` 盘点用户提供的本地素材、可引用链接和缺口素材；本地素材优先，没有合适本地素材时再使用内置模板或联网搜索。
 3. 选择唯一 plan 目录：`.lark-slides/plan/<deck-or-task-id>/`。
 4. 先创建目录：`mkdir -p .lark-slides/plan/<deck-or-task-id>`。
 5. 写入 `.lark-slides/plan/<deck-or-task-id>/slide_plan.json`。
 6. 读取 `xml-schema-quick-ref.md`、`visual-planning.md` 和 `asset-planning.md`。
 7. 按 plan、visual planning 和 asset planning 规则逐页生成 XML，把 `layout_type`、`visual_focus`、`text_density` 转成具体页面几何和文本量约束，并把缺失素材转成可执行兜底视觉。
-8. 创建 PPT 后用 `xml_presentations.get` 回读，核对页面数量、关键元素和 plan 到 XML 的对应关系。
+8. 创建或大幅改写后，按 `validation-checklist.md` 做显式验证；本文件只要求验证记录能说明 plan 到 XML 的对应关系。
 
-模板不能代替 plan。模板搜索和摘要只能影响 `theme_style`、页面流、布局选择和局部布局骨架；最终仍必须有 `.lark-slides/plan/<deck-or-task-id>/slide_plan.json`。
+素材和模板不能代替 plan。素材处理层只能影响背景理解、`theme_style`、`visual_system`、页面流、文案输入、布局选择和局部视觉骨架；最终仍必须有 `.lark-slides/plan/<deck-or-task-id>/slide_plan.json`。
+
+如果用户提供 `.pptx` 或 `.pdf`，并称其为 PPT 模板、幻灯片模板、版式/风格参考，先按 `lark-drive` 的 `drive +import --type slides` 导入为在线 slides，在这个slides上进行内容二次创作。
 
 ## Plan Path
 
@@ -58,6 +60,23 @@ Exception:
   "presentation_goal": "Explain the proposal and secure approval for the next phase.",
   "audience": "Product and engineering leaders who know the domain but need a concise decision narrative.",
   "theme_style": "Clean business style, light background, restrained blue accent, strong visual hierarchy.",
+  "material_inventory": {
+    "local_first": true,
+    "inputs": [
+      {
+        "source": "./reference.pdf",
+        "kind": "style_reference",
+        "usage": "Import as slides, then extract page flow, palette, typography hierarchy, and reusable motif.",
+        "status": "available"
+      }
+    ],
+    "missing": [
+      {
+        "need": "Product UI screenshot",
+        "search_policy": "Search only if no local screenshot is available; otherwise use XML-native fallback."
+      }
+    ]
+  },
   "visual_system": {
     "background_strategy": "Content pages use one light base; cover and closing may use a related dark treatment with the same accent system.",
     "motif": "A reusable left accent bar and consistent card/header treatments.",
@@ -106,9 +125,10 @@ Top-level fields:
 - `presentation_goal`: what the whole deck is trying to achieve.
 - `audience`: target readers or listeners and their assumed background.
 - `theme_style`: visual tone, palette direction, and professional style.
+- `material_inventory`: planning-layer record of local inputs, linked references, chosen usage, missing materials, search policy, and fallbacks. Follow `asset-planning.md`.
 - `visual_system`: deck-level visual rules that must stay stable across pages, including background strategy, recurring motif, and color roles.
 - `typography_constraints`: deck-level limits for line count, text box density, and how to handle long text before XML generation.
-- `verification_plan`: explicit checks to perform after creation or major edits; include background consistency, text fit, visual focus, and asset rendering when relevant.
+- `verification_plan`: plan-specific checks that must be reflected in the final verification record. Detailed post-create validation lives in `validation-checklist.md`.
 - `slides`: ordered page plans.
 
 Each slide must include:
@@ -178,7 +198,17 @@ Do not hard-code a page number just because a previous deck used that pattern. P
 
 ## Asset Planning
 
-`asset_need` is metadata. It can describe a desired figure, diagram, chart, icon, logo, screenshot, or fallback shape-based visual, but it must not require web search, local download, or media upload.
+`material_inventory` records deck-level source handling before XML generation. `asset_need` records page-level visual needs. Follow `asset-planning.md` for both.
+
+Local materials are preferred over remote search. Common material roles:
+
+- `background_reference`: files or links used to understand the topic, facts, audience, or constraints.
+- `style_reference`: PDF/PPTX/slides/templates used for palette, typography, layout, motif, and page flow.
+- `visual_asset`: images, screenshots, logos, icons, charts, diagrams, or figures that may appear on slides.
+- `copy_source`: text, outline, notes, PRD, report, or transcript used as content input.
+- `data_source`: tables, CSV/XLSX, metrics, or structured values used for charts or tables.
+
+If a local `.pdf` / `.pptx` is a style reference, use `lark-drive` to import it as online slides and then use `xml_presentations.get` to read the XML before planning. This is a write operation and requires user intent. Extract design language only by default; do not copy source text unless the user asks.
 
 Use an object for one planned asset, an array for multiple real needs, or `asset_type: "none"` when no asset is useful. Each planned asset must include:
 
@@ -200,20 +230,15 @@ Good examples:
 Before writing each slide XML, map the plan fields to concrete decisions:
 
 - `key_message` determines the headline, dominant claim, or main takeaway.
+- `material_inventory` determines which local materials, imported style references, remote search results, or fallbacks are allowed to influence the page.
 - `layout_type` determines the coordinate structure and element types. Use `visual-planning.md` for concrete layout rules.
 - `visual_focus` determines the largest visual region or emphasized object.
 - `text_density` caps visible text volume.
 - `asset_need` informs placeholder diagrams, icons, charts, screenshots, or shape-based fallback visuals only. Missing real assets must use `fallback_if_missing`, not blank regions.
 
-After creating the PPT, fetch the presentation and verify:
+After creating or rewriting the PPT, use `validation-checklist.md` as the source of truth for verification. The verification record should also mention the plan-specific mapping:
 
 - Page count matches the plan.
-- Every page has the planned title and key message represented.
-- At least several pages have visibly different XML layout structures.
-- Planned `visual_focus` appears as a dominant visual region or object.
-- Asset planning is proportional to the deck topic and length: technical, research, product, and analytical decks should include meaningful planned visuals where they clarify the story, and each planned asset has a visible fallback if no real asset was used.
-- `text_density` is reflected in the amount of visible text.
-- Pages are not crowded, and any planned `timeline`, `comparison`, or `architecture-diagram` page uses its matching visual structure.
-- The actual backgrounds match `visual_system.background_strategy`; any dark, image-led, or emphasis page has an intentional relationship to the rest of the deck.
-- Text boxes respect `typography_constraints`; long labels, captions, footer text, and conclusion bars are not squeezed into boxes that are too short for the intended line count.
-- If real assets are used, the final XML contains renderable asset tokens or supported local placeholders for creation, not http URLs, stale local paths, or blank image boxes.
+- Planned `key_message`, `layout_type`, `visual_focus`, `text_density`, and `asset_need` are represented in XML.
+- `visual_system` and `typography_constraints` visibly affected backgrounds, structure, hierarchy, and text placement.
+- Any maintained `deck_status`, `created_slides`, `assets_used`, or `open_issues` fields are updated to match the current deck state.

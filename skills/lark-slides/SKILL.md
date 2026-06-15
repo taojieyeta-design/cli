@@ -29,22 +29,14 @@ metadata:
 
 **CRITICAL — 生成任何 XML 之前，MUST 先用 Read 工具读取 [xml-schema-quick-ref.md](references/xml-schema-quick-ref.md)，禁止凭记忆猜测 XML 结构。**
 
-**CRITICAL — 新建演示文稿或大幅改写页面时，MUST 先生成 `.lark-slides/plan/<deck-or-task-id>/slide_plan.json`，再生成 XML。先创建对应目录，规划层规则和中间产物生命周期见 [planning-layer.md](references/planning-layer.md)。仅替换一个标题、插入一个块等小型已有页编辑可豁免。**
+**CRITICAL — 新建演示文稿或大幅改写页面时，MUST 先生成 `.lark-slides/plan/<deck-or-task-id>/slide_plan.json`，再生成 XML。先创建对应目录；规划层、素材处理层、视觉规划和验证分别遵循 [planning-layer.md](references/planning-layer.md)、[asset-planning.md](references/asset-planning.md)、[visual-planning.md](references/visual-planning.md)、[validation-checklist.md](references/validation-checklist.md)。仅替换一个标题、插入一个块等小型已有页编辑可豁免。**
 
-**CRITICAL — 新建演示文稿或大幅改写页面时，生成 XML 前 MUST 读取 [visual-planning.md](references/visual-planning.md)，确保 `layout_type`、`visual_focus`、`text_density` 实际改变页面几何、主视觉和文本量。**
-
-**CRITICAL — 新建演示文稿或大幅改写页面时，规划 `asset_need` MUST 遵循 [asset-planning.md](references/asset-planning.md)：只做元数据规划，必须有 `fallback_if_missing`，不得要求真实搜索、下载或上传素材。**
-
-**CRITICAL — 创建或大幅改写后，MUST 按 [validation-checklist.md](references/validation-checklist.md) 做显式验证：回读全文 XML、核对页数和关键元素、检查空白/破损页、明显溢出、布局风险；XML 语法和文本重叠静态检查优先使用 [`scripts/xml_text_overlap_lint.py`](scripts/xml_text_overlap_lint.py)。**
-
-**CRITICAL — 创建前自检或失败排障时，MUST 按 [troubleshooting.md](references/troubleshooting.md) 检查 XML 转义、结构、shell 截断、图片 token、3350001 和布局风险。**
-
-**CRITICAL — 如果用户提到“模板”“套用模板”“参考某种主题/风格/版式”，或用户需求明显落在已有场景模板内（如工作汇报、产品介绍、商业计划书、培训、晋升汇报等），MUST 先用 [`scripts/template_tool.py`](scripts/template_tool.py) 的 `search` 做模板检索；默认给出 2-3 个最匹配模板候选供用户选择。锁定模板后用 `summarize` 获取主题和布局摘要；只有需要布局骨架时才用 `extract` 裁切目标页型 XML。不要直接读取完整模板 XML。**
+创建前自检或失败排障时，按 [troubleshooting.md](references/troubleshooting.md) 检查 XML 转义、结构、shell 截断、图片 token、3350001 和布局风险。
 
 > [!NOTE]
 > `scripts/template_tool.py` 需要 Python 3。`references/template-index.json` 是脚本缓存/轻量路由索引，不是默认给 agent 阅读的文档；`assets/templates/*.xml` 是机器资源，只应通过脚本摘要或裁切，不要全文读取。
 
-**CRITICAL — 使用模板生成或改写页面时，MUST 先 `summarize` 目标页型；只有需要具体布局骨架时才 `extract`。**
+使用模板生成或改写页面时，先 `summarize` 目标页型；只有需要具体布局骨架时才 `extract`。
 
 **编辑已有幻灯片页面**：优先用 [`+replace-slide`](references/lark-slides-replace-slide.md)（块级替换/插入，不动页序）；选择 action 和完整读-改-写流程见 [`lark-slides-edit-workflows.md`](references/lark-slides-edit-workflows.md)。
 
@@ -92,44 +84,6 @@ lark-cli auth login --domain slides
 ## Workflow
 
 > **这是演示文稿，不是文档。** 每页 slide 是独立的视觉画面，信息密度要低，排版要留白。
-
-### Design Ideas
-
-不要生成无设计感的幻灯片。纯白背景 + 标题 + bullets 只能作为极简临时稿，不能作为正式交付。
-
-开始写 XML 前，先在 `slide_plan.json` 里确定 deck 级视觉策略：
-
-- **主题化配色**：配色必须服务本次主题、行业和受众，不要默认蓝色商务风。如果把同一套颜色换到另一个完全不同主题仍然成立，说明配色不够具体。
-- **主次比例**：选择 1 个主色承担约 60-70% 视觉权重，1-2 个辅助色承担结构和分区，1 个强调色只用于关键数字、结论或行动点。不要让所有颜色权重相同。
-- **背景一致性**：先确定全 deck 的背景策略，默认保持同一明暗基调和底色体系；只有分节、转场或强调页才有意改变背景，并必须通过相同主色、纹理、边栏或 motif 让变化看起来属于同一套设计。无论深浅，都要保证正文、图标和线条对比充足。
-- **统一 motif**：选择一个可复用视觉母题贯穿全文，例如粗侧边栏、圆形图标底、半出血图片区、编号节点、卡片左上角色块或大号数字。不要每页换一套装饰语言。
-
-每页至少要有一个视觉元素：图片、图标、图表、表格、流程、对比结构、大号数字、示意图或由 shape 组成的抽象视觉。文本框本身不算主视觉。
-
-可优先考虑这些页面形态：
-
-- **双栏结构**：左文右图或左图右文，视觉区域占 35-45% 宽度。
-- **图标行**：图标在色块或圆形底中，右侧是短标题和一句解释。
-- **2x2 / 2x3 网格**：适合能力、模块、风险、行动项，每格内容保持同等层级。
-- **半出血视觉**：图片或抽象形状占据左/右半屏，文字覆盖或贴边排布。
-- **大数字卡片**：关键指标用 60-72pt 数字，下面配 10-14pt 标签。
-- **对比列**：before/after、方案 A/B、问题/解法用左右并列，标题和基线严格对齐。
-- **时间线/流程图**：步骤用节点和箭头表达，流程方向必须一眼可见。
-
-字体和间距建议：
-
-- 标题 36-44pt，关键结论可更大；正文 14-18pt；注释 10-12pt。
-- 正文默认左对齐；只在封面、结尾或大号数字场景中使用居中。
-- 页面边距至少 40px；内容块之间保持 24-40px 间距，并在同一 deck 内保持一致。
-- 卡片内边距要真实留出空间，不要让文字贴边；对齐 shape 和文字时要考虑文本框 padding。
-
-常见错误必须避免：
-
-- 不要所有页面复用同一种标题 + 三 bullets 版式。
-- 不要用低对比文字或低对比图标，例如浅灰字压在浅色背景上。
-- 不要让装饰线穿过文字，或让页脚、来源、编号挤压主体内容。
-- 不要把素材缺失表现为空白图片框；必须按 `fallback_if_missing` 生成 XML-native 视觉。
-- 不要留下模板占位文案、示例公司名、示例日期或与用户主题无关的原模板内容。
 
 ### 创建方式选择
 

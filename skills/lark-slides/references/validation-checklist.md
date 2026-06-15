@@ -44,6 +44,10 @@ python3 skills/lark-slides/scripts/xml_text_overlap_lint.py --input <presentatio
 | `xml_not_well_formed` | XML 语法错误或文本未转义 | 修复标签闭合、属性引号、`&` / `<` / `>` 转义 |
 | `bbox_overlap` | 文本元素的估算绘制区域明显重叠 | 拉开文本坐标、缩小文本框/字号，或改成明确的分栏/分组结构 |
 
+## Optional Screenshot Upgrade
+
+如果截图或可视化预览能力可用，优先获取页面截图辅助判断最终效果；截图不能替代 XML 回读和页数核对。
+
 ## Page Count And Structure
 
 - 实际页数必须等于用户要求或 `slide_plan.json` 的页数。
@@ -102,9 +106,10 @@ python3 skills/lark-slides/scripts/xml_text_overlap_lint.py --input <presentatio
 ```text
 验证记录：
 - 回读：已执行 xml_presentations.get，实际页数 N / 预期 N。
+- 截图：截图能力可用时，已用截图辅助判断最终效果。
 - 关键页：架构解释 / Self-Attention / 对比或演进 / 总结页均存在。
 - 结构：检查了主要 shape/img/table/chart 元素，无明显空白页或破损页。
 - 布局：检查了标题层级、主视觉、重叠/越界/文本溢出风险。
 ```
 
-不要声称完成了人工视觉验收，除非确实打开或获取了可视化结果。仅从 XML 静态检查得出的结论，应表述为“静态检查未发现明显问题”。
+不要声称完成了截图或人工视觉验收，除非确实打开、获取截图或拿到了可视化结果。仅从 XML 静态检查得出的结论，应表述为“静态检查未发现明显问题”。
