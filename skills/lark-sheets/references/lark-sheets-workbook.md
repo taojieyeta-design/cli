@@ -200,7 +200,7 @@ _一个或多个子表的 typed 数据，每个数组元素写入一张子表；
 
 ### `+workbook-create`
 
-新建电子表格，可选预填数据。三种数据入口（untyped `--values` / typed `--sheets` JSON / typed `--dataframe` Arrow 二进制）**三方互斥**，按需选一——两者都走同一条分批 `set_cell_range` 写入：
+新建电子表格，可选预填数据。三种数据入口（untyped `--values` / typed `--sheets` JSON / typed `--dataframe` Arrow 二进制）**三方互斥**，按需选一——三者都走同一条分批写入：
 
 ```bash
 # 1) untyped：--values（一个二维数组，表头并入第一行；值原样写、类型由飞书自动识别，
@@ -231,7 +231,7 @@ python prepare.py | lark-cli sheets +workbook-create --title "交易" --datafram
 
 `--styles` 可在建表写入时同时写视觉处理。它和 `--sheets` 一样只有一种外层写法：顶层对象里放 `styles` 数组；数组每项对应一个子表，含 `name`，并按能力拆成四类可选数组：
 
-- `cell_styles`：像 `+cells-set-style`，用 A1 单元格 `range` 加扁平样式字段（`font_weight` / `background_color` / `number_format` 等）和可选 `border_styles`；这些样式会合并进同一次内容 `set_cell_range`。
+- `cell_styles`：像 `+cells-set-style`，用 A1 单元格 `range` 加扁平样式字段（`font_weight` / `background_color` / `number_format` 等）和可选 `border_styles`；这些样式会随内容在同一次写入里一并应用。
 - `cell_merges`：用 A1 单元格 `range` 设置合并，`merge_type` 默认为 `all`，可选 `rows` / `columns`。
 - `row_sizes`：用行范围（如 `1:3`）设置行高，`type` 为 `pixel` / `standard` / `auto`；`pixel` 需要 `size`。
 - `col_sizes`：用列范围（如 `A:C`）设置列宽，`type` 为 `pixel` / `standard`；`pixel` 需要 `size`。

@@ -22,7 +22,7 @@
 | 读取目的 | 用这个 shortcut | 数据去向 | 说明 |
 |---------|----------------|---------|------|
 | 快速查看纯值数据、批量处理 | `+csv-get` | 对话上下文 | 返回 CSV 文本（每行带 `[row=N]` 前缀）；大表请按 `--range` 行窗口分批读（截断时看 `has_more`） |
-| 按列类型结构化读出（喂 DataFrame / round-trip 回 `+table-put`） | `+table-get` | 对话上下文 | 返回 typed 协议（`columns:[列名]` + `data` + `dtypes`/`formats`），输出形状对齐 pandas split；可一行 `pd.DataFrame(sheet["data"], columns=sheet["columns"]).astype(sheet["dtypes"])` 还原 DataFrame，或直接 round-trip 回 `+table-put` |
+| 按列类型结构化读出（喂 DataFrame / round-trip 回 `+table-put`） | `+table-get` | 对话上下文 | 返回 typed 协议（`columns:[列名]` + `data` + `dtypes`/`formats` + `range`），输出形状对齐 pandas split；可一行 `pd.DataFrame(sheet["data"], columns=sheet["columns"]).astype(sheet["dtypes"])` 还原 DataFrame，或直接 round-trip 回 `+table-put`。不带 `--range` 时读**完整 used range**（跨过表中部空行 / 空列），每个子表回传实际读取范围 `range` 供完整性校验 |
 | 查看公式、样式、批注、数据验证 | `+cells-get` | 对话上下文 | 返回单元格完整信息，token 开销较大 |
 | 查看某区域的下拉框（数据验证）选项 | `+dropdown-get` | 对话上下文 | 返回该 A1 范围已配置的下拉列表选项 |
 
@@ -128,7 +128,7 @@ _公共：URL/token（无 sheet 定位） · 系统：`--dry-run`_
 | --- | --- | --- | --- |
 | `--sheet-id` | string | optional | 只读该子表（按 id）；省略则读所有子表 |
 | `--sheet-name` | string | optional | 只读该子表（按名）；省略则读所有子表 |
-| `--range` | string | optional | 读取的 A1 范围；省略则读每个子表的当前数据区 |
+| `--range` | string | optional | 读取的 A1 范围；省略则读每个子表的完整 used range（会跨过表中部的整行空行 / 整列空列，不会被截断） |
 | `--no-header` | bool | optional | 把第一行当数据而非表头（列名取 col1/col2 …） |
 | `--dataframe-out` | string | optional | 以一份 Arrow IPC 文件（Feather v2）格式输出 typed 表格，替代默认的 JSON 输出。用 `@<path>` 传文件或 `-` 写二进制 stdout（同其他 binary I/O flag 的约定）。是 `+table-put` / `+workbook-create` 入口 `--dataframe` 的镜像 —— pandas 端 `pd.read_feather("x.arrow")` 或 `pd.read_feather(io.BytesIO(stdout))` 一行读回。仅支持单 sheet：必须给 `--sheet-id` 或 `--sheet-name`；读整本 workbook 仍走默认 JSON。列类型沿用 typed 读回（string/number/date/bool）；`number_format` 以 Arrow Field metadata 保留，Arrow 文件可直接喂回 `+table-put --dataframe`。 |
 
@@ -171,9 +171,11 @@ lark-cli sheets +cells-get --url "https://example.feishu.cn/sheets/shtXXX" --she
 
 ### `+table-get`（飞书 → DataFrame，类型保真读出）
 
-`+table-put`（写入侧，见 write-cells reference）的镜像：把表格读回与 `--sheets` 完全同构的 typed 协议（`sheets[]` + `columns:[列名]` + `data:[[行]]` + `dtypes:{列名:pandas_dtype}` + `formats?:{列名:number_format}`），可直接喂回 `+table-put` 或一行还原 DataFrame。
+`+table-put`（写入侧，见 write-cells reference）的镜像：把表格读回与 `--sheets` 完全同构的 typed 协议（`sheets[]` + `columns:[列名]` + `data:[[行]]` + `dtypes:{列名:pandas_dtype}` + `formats?:{列名:number_format}` + `range`），可直接喂回 `+table-put` 或一行还原 DataFrame。
 
-列类型从每列 `number_format` 推断（日期格式→`date`/`datetime64[ns]`、数值→`number`/`float64`、bool→`bool`），`date` 列的序列号转回 ISO `yyyy-mm-dd`——日期、数字往返不丢类型。**列类型只在该列所有非空值一致时才定（`number` / `date` / `bool`）；一列混了类型（如数字列混入「暂无」、日期列混入裸数字）会降为 `string`（dtypes 输出 `object`），让 `dtypes` 与 `data` 里每个值自洽——能 round-trip 回 `+table-put`、不让 pandas `astype` 崩。降级是无损的（脏值原样保留为文本）；若要把零星脏值转成数值列，交给调用方在 pandas 侧做（`to_numeric(errors='coerce')`），那里原始值仍在、可追溯。** 底层复用 `get_cell_ranges` / `get_range_as_csv`。默认读所有子表、第一行当表头（`--no-header` 把首行当数据、列名取 `col1` / `col2` …）。
+**默认（不带 `--range`）读取整张子表的完整 used range**：会跨过表中部的整行空行 / 整列空列，覆盖到真实数据边界。每个子表都回传实际读取的 `range`（如 `A1:F10`）——`+table-get` 不返回分页 / 截断标志，这个 `range` 是判断是否读全的唯一信号：拿它和源 xlsx 行列数、关键末行 / 末日期交叉核对，确认读取完整。仍要精确控制范围时显式传 `--range`。
+
+列类型从每列 `number_format` 推断（日期格式→`date`/`datetime64[ns]`、数值→`number`/`float64`、bool→`bool`），`date` 列的序列号转回 ISO `yyyy-mm-dd`——日期、数字往返不丢类型。**列类型只在该列所有非空值一致时才定（`number` / `date` / `bool`）；一列混了类型（如数字列混入「暂无」、日期列混入裸数字）会降为 `string`（dtypes 输出 `object`），让 `dtypes` 与 `data` 里每个值自洽——能 round-trip 回 `+table-put`、不让 pandas `astype` 崩。降级是无损的（脏值原样保留为文本）；若要把零星脏值转成数值列，交给调用方在 pandas 侧做（`to_numeric(errors='coerce')`），那里原始值仍在、可追溯。** 默认读所有子表、第一行当表头（`--no-header` 把首行当数据、列名取 `col1` / `col2` …）。
 
 ```bash
 # 默认读所有子表 → sheets[]（与 +table-put 的 --sheets 同构，可喂回或转 DataFrame）

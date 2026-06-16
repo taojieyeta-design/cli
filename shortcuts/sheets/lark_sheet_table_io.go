@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/internal/output"
+	"github.com/larksuite/cli/internal/util"
 	"github.com/larksuite/cli/shortcuts/common"
 )
 
@@ -595,7 +597,7 @@ func tablePutFullRange(s *tableSheetSpec, totalRows int) string {
 // writeSheetData writes one sheet's matrix via set_cell_range, splitting into
 // row batches when the cell count would exceed tablePutMaxCellsPerWrite.
 // Returns a per-sheet summary for the result envelope.
-func writeSheetData(ctx context.Context, runtime *common.RuntimeContext, token, sheetID string, s *tableSheetSpec, styles *workbookCreateStylePayload) (map[string]interface{}, error) {
+func writeSheetData(ctx context.Context, runtime *common.RuntimeContext, token, sheetID string, s *tableSheetSpec, styles *workbookCreateStylePayload, dims gridDims) (map[string]interface{}, error) {
 	_, col0, row0, err := sheetAnchor(s)
 	if err != nil {
 		return nil, err
@@ -607,7 +609,7 @@ func writeSheetData(ctx context.Context, runtime *common.RuntimeContext, token, 
 	baseRow := row0
 	writeHeader := headerOn(s)
 	if s.Mode == "append" {
-		lastRow, err := lastDataRow(ctx, runtime, token, sheetID)
+		lastRow, err := lastDataRow(ctx, runtime, token, sheetID, dims)
 		if err != nil {
 			return nil, fmt.Errorf("resolving last data row for append: %w", err)
 		}
@@ -703,12 +705,24 @@ func writeModeName(s *tableSheetSpec) string {
 // lastDataRow returns the 1-based row number of the last row containing data in
 // the sheet (0 when empty), so append mode can place new rows just below it. It
 // reads current_region via get_range_as_csv — the backend's reported true data
-// extent — anchored at A1.
-func lastDataRow(ctx context.Context, runtime *common.RuntimeContext, token, sheetID string) (int, error) {
+// extent.
+//
+// The anchor range matters for the same reason it does in sheetCurrentRegion:
+// current_region is the bounding box of non-empty cells WITHIN the requested
+// range, so an A1 anchor stops at the first fully-empty row and reports a
+// too-small last row — append would then write on top of and overwrite the data
+// past that gap. Anchoring over the whole grid (A1:<lastCol><lastRow>, from the
+// sheet's row_count / column_count) makes the probe span internal blank rows.
+// When dimensions are unknown it falls back to the legacy A1 anchor.
+func lastDataRow(ctx context.Context, runtime *common.RuntimeContext, token, sheetID string, dims gridDims) (int, error) {
+	anchor := "A1"
+	if dims.rows > 0 && dims.cols > 0 {
+		anchor = "A1:" + columnIndexToLetter(dims.cols-1) + strconv.Itoa(dims.rows)
+	}
 	out, err := callTool(ctx, runtime, token, ToolKindRead, "get_range_as_csv", map[string]interface{}{
 		"excel_id": token,
 		"sheet_id": sheetID,
-		"range":    "A1",
+		"range":    anchor,
 		"max_rows": unboundedReadLimit,
 	})
 	if err != nil {
@@ -742,7 +756,7 @@ func lastDataRow(ctx context.Context, runtime *common.RuntimeContext, token, she
 // On failure it returns the summaries written so far alongside the error, so
 // the caller can surface a partial_success.
 func writeTypedSheets(ctx context.Context, runtime *common.RuntimeContext, token string, payload *tablePayload, adoptSheetID string, styles *workbookCreateSheetStyles) ([]interface{}, error) {
-	byName, err := listSheetIDsByName(ctx, runtime, token)
+	byName, dimsByName, err := listSheetIDsByName(ctx, runtime, token)
 	if err != nil {
 		return nil, err
 	}
@@ -771,8 +785,10 @@ func writeTypedSheets(ctx context.Context, runtime *common.RuntimeContext, token
 				return written, fmt.Errorf("creating sheet %q failed: %w", s.Name, err)
 			}
 			byName[s.Name] = sheetID
+			// A freshly created sheet's grid is exactly what we just asked for.
+			dimsByName[s.Name] = gridDims{rows: rows, cols: cols}
 		}
-		summary, err := writeSheetData(ctx, runtime, token, sheetID, s, styles.styleFor(i))
+		summary, err := writeSheetData(ctx, runtime, token, sheetID, s, styles.styleFor(i), dimsByName[s.Name])
 		if err != nil {
 			return written, fmt.Errorf("writing sheet %q failed: %w", s.Name, err)
 		}
@@ -952,37 +968,41 @@ func ensureSheetCapacity(ctx context.Context, runtime *common.RuntimeContext, to
 	return nil
 }
 
-// listSheetIDsByName maps every existing sub-sheet's display name to its id via
-// a single get_workbook_structure read. Used by write mode to decide which
-// payload sheets already exist.
-func listSheetIDsByName(ctx context.Context, runtime *common.RuntimeContext, token string) (map[string]string, error) {
+// gridDims is a sub-sheet's physical grid size (row_count × column_count from
+// get_workbook_structure). A zero in either field means "unknown", which makes
+// the used-range probes (sheetCurrentRegion / lastDataRow) fall back to their
+// legacy A1 anchor instead of a full-grid one.
+type gridDims struct {
+	rows int
+	cols int
+}
+
+// listSheetIDsByName maps every existing sub-sheet's display name to its id and
+// physical grid dimensions via a single get_workbook_structure read. Used by
+// write mode to decide which payload sheets already exist (and, for append, to
+// anchor the last-data-row probe over the whole grid — see lastDataRow).
+func listSheetIDsByName(ctx context.Context, runtime *common.RuntimeContext, token string) (map[string]string, map[string]gridDims, error) {
 	out, err := callTool(ctx, runtime, token, ToolKindRead, "get_workbook_structure", map[string]interface{}{
 		"excel_id": token,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	m, ok := out.(map[string]interface{})
 	if !ok {
-		return nil, output.Errorf(output.ExitAPI, "tool_output", "get_workbook_structure returned non-object output")
+		return nil, nil, errs.NewInternalError(errs.SubtypeInvalidResponse, "get_workbook_structure returned non-object output")
 	}
 	sheets, _ := m["sheets"].([]interface{})
 	byName := make(map[string]string, len(sheets))
+	dimsByName := make(map[string]gridDims, len(sheets))
 	for _, raw := range sheets {
-		sm, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		id, _ := sm["sheet_id"].(string)
-		name, _ := sm["sheet_name"].(string)
-		if name == "" {
-			name, _ = sm["title"].(string)
-		}
+		id, name, rc, cc := tableGetSheetMeta(raw)
 		if id != "" && name != "" {
 			byName[name] = id
+			dimsByName[name] = gridDims{rows: rc, cols: cc}
 		}
 	}
-	return byName, nil
+	return byName, dimsByName, nil
 }
 
 // tablePutPartial builds a structured error for a multi-sheet write that failed
@@ -1109,15 +1129,16 @@ var TableGet = common.Shortcut{
 	DryRun: func(ctx context.Context, runtime *common.RuntimeContext) *common.DryRunAPI {
 		token, _ := resolveSpreadsheetToken(runtime)
 		dry := common.NewDryRunAPI()
-		if strings.TrimSpace(runtime.Str("sheet-id")) == "" && strings.TrimSpace(runtime.Str("sheet-name")) == "" {
-			body, _ := buildToolBody("get_workbook_structure", map[string]interface{}{"excel_id": token})
-			dry.POST(toolInvokePath(token, ToolKindRead)).Desc("list sub-sheets via get_workbook_structure").Body(body)
-		}
+		// get_workbook_structure runs on every path now (not just whole-workbook):
+		// the single-sheet selector path also reads it to learn the grid's physical
+		// dimensions, which anchor the default used-range probe over the full grid.
+		body, _ := buildToolBody("get_workbook_structure", map[string]interface{}{"excel_id": token})
+		dry.POST(toolInvokePath(token, ToolKindRead)).Desc("read sub-sheets + grid dimensions via get_workbook_structure").Body(body)
 		rng := strings.TrimSpace(runtime.Str("range"))
 		if rng == "" {
-			rng = "<each sheet's current region>"
+			rng = "<each sheet's used range (full-grid current_region)>"
 		}
-		body, _ := buildToolBody("get_cell_ranges", map[string]interface{}{
+		body, _ = buildToolBody("get_cell_ranges", map[string]interface{}{
 			"excel_id": token, "ranges": []string{rng},
 			"include_styles": true, "value_render_option": "raw_value",
 		})
@@ -1181,48 +1202,96 @@ var TableGet = common.Shortcut{
 }
 
 // tableGetSheet identifies a sheet to read back.
+//
+// rowCount / colCount carry the sheet's physical grid dimensions
+// (get_workbook_structure's row_count / column_count). They're used to anchor
+// the default used-range probe over the whole grid instead of A1 — see
+// sheetCurrentRegion. 0 means "unknown" (structure read skipped or failed), in
+// which case the probe falls back to the legacy A1 anchor.
 type tableGetSheet struct {
-	id   string
-	name string
+	id       string
+	name     string
+	rowCount int
+	colCount int
 }
 
 // tableGetTargets resolves which sheets +table-get reads: the one named by
 // --sheet-id / --sheet-name, or every sheet (in workbook order) when neither is
-// given.
+// given. Either way it reads get_workbook_structure once so each target carries
+// its physical grid dimensions (rowCount / colCount) — the default used-range
+// probe needs them to anchor over the full grid. For the single-sheet selector
+// path this also backfills the missing name (handy when only --sheet-id was
+// given, so the output spec isn't left nameless).
 func tableGetTargets(ctx context.Context, runtime *common.RuntimeContext, token string) ([]tableGetSheet, error) {
 	id := strings.TrimSpace(runtime.Str("sheet-id"))
 	name := strings.TrimSpace(runtime.Str("sheet-name"))
-	if id != "" {
-		return []tableGetSheet{{id: id}}, nil
-	}
-	if name != "" {
-		return []tableGetSheet{{name: name}}, nil
-	}
+
 	out, err := callTool(ctx, runtime, token, ToolKindRead, "get_workbook_structure", map[string]interface{}{"excel_id": token})
 	if err != nil {
+		// Single-sheet selector path can degrade gracefully without dimensions
+		// (the probe falls back to the A1 anchor); the whole-workbook path can't
+		// enumerate sheets without the structure, so it must surface the error.
+		if id != "" {
+			return []tableGetSheet{{id: id}}, nil
+		}
+		if name != "" {
+			return []tableGetSheet{{name: name}}, nil
+		}
 		return nil, err
 	}
 	m, _ := out.(map[string]interface{})
 	raw, _ := m["sheets"].([]interface{})
+
+	// Selector path: find the matching sheet to pick up its dimensions (and
+	// backfill name when only --sheet-id was given). If no row matches, fall
+	// back to a dimensionless target so the read still proceeds via the A1
+	// anchor rather than erroring on a structure/selector mismatch.
+	if id != "" || name != "" {
+		for _, r := range raw {
+			sid, sname, rc, cc := tableGetSheetMeta(r)
+			if (id != "" && sid == id) || (name != "" && sname == name) {
+				return []tableGetSheet{{id: sid, name: sname, rowCount: rc, colCount: cc}}, nil
+			}
+		}
+		if id != "" {
+			return []tableGetSheet{{id: id}}, nil
+		}
+		return []tableGetSheet{{name: name}}, nil
+	}
+
 	targets := make([]tableGetSheet, 0, len(raw))
 	for _, r := range raw {
-		sm, ok := r.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		sid, _ := sm["sheet_id"].(string)
-		sname, _ := sm["sheet_name"].(string)
-		if sname == "" {
-			sname, _ = sm["title"].(string)
-		}
+		sid, sname, rc, cc := tableGetSheetMeta(r)
 		if sid != "" {
-			targets = append(targets, tableGetSheet{id: sid, name: sname})
+			targets = append(targets, tableGetSheet{id: sid, name: sname, rowCount: rc, colCount: cc})
 		}
 	}
 	if len(targets) == 0 {
-		return nil, output.Errorf(output.ExitAPI, "tool_output", "no sheets found in workbook")
+		return nil, errs.NewInternalError(errs.SubtypeInvalidResponse, "get_workbook_structure returned no sheets")
 	}
 	return targets, nil
+}
+
+// tableGetSheetMeta pulls one sheet's id, name (title fallback), and physical
+// grid dimensions out of a get_workbook_structure sheets[] entry. Dimensions
+// default to 0 ("unknown") when absent or non-numeric.
+func tableGetSheetMeta(r interface{}) (id, name string, rowCount, colCount int) {
+	sm, ok := r.(map[string]interface{})
+	if !ok {
+		return "", "", 0, 0
+	}
+	id, _ = sm["sheet_id"].(string)
+	name, _ = sm["sheet_name"].(string)
+	if name == "" {
+		name, _ = sm["title"].(string)
+	}
+	if f, ok := util.ToFloat64(sm["row_count"]); ok {
+		rowCount = int(f)
+	}
+	if f, ok := util.ToFloat64(sm["column_count"]); ok {
+		colCount = int(f)
+	}
+	return id, name, rowCount, colCount
 }
 
 // readSheetAsSpec reads one sheet's region and rebuilds it as a typed-protocol
@@ -1244,11 +1313,12 @@ func readSheetAsSpec(ctx context.Context, runtime *common.RuntimeContext, token 
 			"columns": []interface{}{},
 			"data":    []interface{}{},
 			"dtypes":  map[string]interface{}{},
+			"range":   "",
 		}
 	}
 	region := userRange
 	if region == "" {
-		r, err := sheetCurrentRegion(ctx, runtime, token, t.id, t.name)
+		r, err := sheetCurrentRegion(ctx, runtime, token, t)
 		if err != nil {
 			return nil, err
 		}
@@ -1319,6 +1389,11 @@ func readSheetAsSpec(ctx context.Context, runtime *common.RuntimeContext, token 
 		"columns": columnNames,
 		"data":    data,
 		"dtypes":  dtypes,
+		// The range actually read — whether from --range or the computed used
+		// range. get_cell_ranges has no has_more flag, so this is the only signal
+		// a caller has to detect truncation (compare its extent against the source
+		// xlsx / +workbook-info). Harmless on round-trip: +table-put ignores it.
+		"range": region,
 	}
 	if len(formats) > 0 {
 		spec["formats"] = formats
@@ -1326,11 +1401,25 @@ func readSheetAsSpec(ctx context.Context, runtime *common.RuntimeContext, token 
 	return spec, nil
 }
 
-// sheetCurrentRegion returns the A1 range covering the sheet's existing data
-// (current_region), or "" for an empty sheet.
-func sheetCurrentRegion(ctx context.Context, runtime *common.RuntimeContext, token, sheetID, sheetName string) (string, error) {
-	input := map[string]interface{}{"excel_id": token, "range": "A1", "max_rows": unboundedReadLimit}
-	sheetSelectorForToolInput(input, sheetID, sheetName)
+// sheetCurrentRegion returns the A1 range covering the sheet's existing data,
+// or "" for an empty sheet.
+//
+// It reads get_range_as_csv's current_region, but the anchor range it requests
+// is critical: current_region is the bounding box of the non-empty cells WITHIN
+// the requested range, so an A1 anchor stops at the first fully-empty row or
+// column and silently truncates everything past it (the pro016 / pro025
+// incident). Anchoring over the whole physical grid (A1:<lastCol><lastRow>,
+// from the sheet's row_count / column_count) instead makes the backend span
+// internal gaps and report the true used range. When dimensions are unknown
+// (structure read skipped / failed) it falls back to the legacy A1 anchor so
+// the path degrades to its prior behavior rather than erroring.
+func sheetCurrentRegion(ctx context.Context, runtime *common.RuntimeContext, token string, t tableGetSheet) (string, error) {
+	anchor := "A1"
+	if t.rowCount > 0 && t.colCount > 0 {
+		anchor = "A1:" + columnIndexToLetter(t.colCount-1) + strconv.Itoa(t.rowCount)
+	}
+	input := map[string]interface{}{"excel_id": token, "range": anchor, "max_rows": unboundedReadLimit}
+	sheetSelectorForToolInput(input, t.id, t.name)
 	out, err := callTool(ctx, runtime, token, ToolKindRead, "get_range_as_csv", input)
 	if err != nil {
 		return "", err

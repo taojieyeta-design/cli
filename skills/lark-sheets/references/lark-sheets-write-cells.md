@@ -474,7 +474,7 @@ lark-cli sheets +csv-put --spreadsheet-token shtXXX --sheet-id "$SID" \
 
 ### `+table-put`（DataFrame → 飞书，类型保真写入）
 
-把结构化数据（DataFrame、list of dict、Counter）类型保真写入**已有**表，底层复用 `set_cell_range`（同 `+cells-set`）。协议形状**对齐 pandas `to_json(orient="split")`**：`columns:[列名]` + `data:[[行...]]`，可选 `dtypes:{列名:pandas_dtype}` 决定每列类型（number 保精度、date 落真日期），可选 `formats:{列名:number_format}` 覆盖显示格式（千分位 / 百分比 / 自定义日期）。dtypes 缺失时整张表按 string 写入（带 `@` 文本格式，邮编 / 订单号等含前导零的 id 保真）。
+把结构化数据（DataFrame、list of dict、Counter）类型保真写入**已有**表（写入语义同 `+cells-set`）。协议形状**对齐 pandas `to_json(orient="split")`**：`columns:[列名]` + `data:[[行...]]`，可选 `dtypes:{列名:pandas_dtype}` 决定每列类型（number 保精度、date 落真日期），可选 `formats:{列名:number_format}` 覆盖显示格式（千分位 / 百分比 / 自定义日期）。dtypes 缺失时整张表按 string 写入（带 `@` 文本格式，邮编 / 订单号等含前导零的 id 保真）。
 
 只写入**已有**表（`--url` / `--spreadsheet-token` 二选一必填），不新建工作簿——**要新建表格直接用 `+workbook-create --sheets`**（同协议、一步建表 + 类型保真写入，详见 workbook reference）。读回用镜像命令 `+table-get`（见 read-data reference），输出与 `--sheets` 同构、可 round-trip。
 
@@ -567,7 +567,7 @@ subprocess.run(["lark-cli","sheets","+table-put","--url",URL,"--dataframe","-"],
 
 #### `--styles`（写入时同时套样式）
 
-`--styles` 在 typed 写入后顺带应用视觉处理，省掉一次 `+cells-set-style` 往返。协议与 `+workbook-create --styles` **完全同构**（详见 workbook reference）：顶层 `{styles:[...]}`，数组每项对应一个被写入的子表、含 `name`，并按能力拆成四类可选数组——`cell_styles`（A1 单元格 range + 扁平样式字段，含 `number_format` / 颜色 / 对齐 / `border_styles`，合并进同一次 `set_cell_range`）、`cell_merges`、`row_sizes`、`col_sizes`。styles 数组的长度 / 顺序 / name 必须与被写入的子表对应：配 `--sheets` 时与 `--sheets.sheets` 对齐；配 `--dataframe`（单子表，名为 `Sheet1`）时只给一个 name 为 `Sheet1` 的 styles 项。
+`--styles` 在 typed 写入后顺带应用视觉处理，省掉一次 `+cells-set-style` 往返。协议与 `+workbook-create --styles` **完全同构**（详见 workbook reference）：顶层 `{styles:[...]}`，数组每项对应一个被写入的子表、含 `name`，并按能力拆成四类可选数组——`cell_styles`（A1 单元格 range + 扁平样式字段，含 `number_format` / 颜色 / 对齐 / `border_styles`，随内容在同一次写入里一并应用）、`cell_merges`、`row_sizes`、`col_sizes`。styles 数组的长度 / 顺序 / name 必须与被写入的子表对应：配 `--sheets` 时与 `--sheets.sheets` 对齐；配 `--dataframe`（单子表，名为 `Sheet1`）时只给一个 name 为 `Sheet1` 的 styles 项。
 
 ```bash
 lark-cli sheets +table-put --url "<表URL>" \

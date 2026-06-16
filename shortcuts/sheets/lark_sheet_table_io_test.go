@@ -1092,13 +1092,14 @@ func TestTableGet_CellToTyped(t *testing.T) {
 // survive instead of collapsing to a number.
 func TestTableGet_DigitStringRoundTrip(t *testing.T) {
 	t.Parallel()
+	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"`+testSheetID+`","sheet_name":"S","row_count":200,"column_count":20,"index":0}]}`)
 	region := toolOutputStub(testToken, "read", `{"current_region":"A1:A2"}`)
 	cells := toolOutputStub(testToken, "read", `{"ranges":[{"cells":[`+
 		`[{"value":"邮编"}],`+
 		`[{"value":"00123","cell_styles":{"number_format":"@"}}]`+
 		`]}]}`)
 	out, err := runShortcutWithStubs(t, TableGet,
-		[]string{"--url", testURL, "--sheet-name", "S"}, region, cells)
+		[]string{"--url", testURL, "--sheet-name", "S"}, structure, region, cells)
 	if err != nil {
 		t.Fatalf("execute failed: %v\nout=%s", err, out)
 	}
@@ -1130,13 +1131,14 @@ func TestTableGet_DigitStringRoundTrip(t *testing.T) {
 // types inferred from number_format.
 func TestTableGet_ExecuteRoundTrip(t *testing.T) {
 	t.Parallel()
+	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"`+testSheetID+`","sheet_name":"销售","row_count":200,"column_count":20,"index":0}]}`)
 	region := toolOutputStub(testToken, "read", `{"current_region":"A1:C2"}`)
 	cells := toolOutputStub(testToken, "read", `{"ranges":[{"cells":[`+
 		`[{"value":"门店"},{"value":"月份"},{"value":"销售额"}],`+
 		`[{"value":"北京"},{"value":45306,"cell_styles":{"number_format":"yyyy-mm"}},{"value":259874,"cell_styles":{"number_format":"#,##0"}}]`+
 		`]}]}`)
 	out, err := runShortcutWithStubs(t, TableGet,
-		[]string{"--url", testURL, "--sheet-name", "销售"}, region, cells)
+		[]string{"--url", testURL, "--sheet-name", "销售"}, structure, region, cells)
 	if err != nil {
 		t.Fatalf("execute failed: %v\nout=%s", err, out)
 	}
@@ -1191,13 +1193,14 @@ func TestTableGet_ExecuteRoundTrip(t *testing.T) {
 // schema error here.
 func TestTableGet_OutputRoundTripsBackIntoTablePut(t *testing.T) {
 	t.Parallel()
+	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"`+testSheetID+`","sheet_name":"S","row_count":200,"column_count":20,"index":0}]}`)
 	region := toolOutputStub(testToken, "read", `{"current_region":"A1:D2"}`)
 	cells := toolOutputStub(testToken, "read", `{"ranges":[{"cells":[`+
 		`[{"value":"city"},{"value":"day"},{"value":"revenue"},{"value":"closed"}],`+
 		`[{"value":"BJ"},{"value":45306,"cell_styles":{"number_format":"yyyy-mm-dd"}},{"value":1234.5,"cell_styles":{"number_format":"#,##0.00"}},{"value":true}]`+
 		`]}]}`)
 	out, err := runShortcutWithStubs(t, TableGet,
-		[]string{"--url", testURL, "--sheet-name", "S"}, region, cells)
+		[]string{"--url", testURL, "--sheet-name", "S"}, structure, region, cells)
 	if err != nil {
 		t.Fatalf("execute failed: %v\nout=%s", err, out)
 	}
@@ -1258,7 +1261,7 @@ func TestTableGet_DryRunIncludesCellRead(t *testing.T) {
 // get_workbook_structure lists sheets, then each is read in order.
 func TestTableGet_AllSheets(t *testing.T) {
 	t.Parallel()
-	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"s1","sheet_name":"A","index":0},{"sheet_id":"s2","sheet_name":"B","index":1}]}`)
+	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"s1","sheet_name":"A","row_count":200,"column_count":20,"index":0},{"sheet_id":"s2","sheet_name":"B","row_count":200,"column_count":20,"index":1}]}`)
 	regionA := toolOutputStub(testToken, "read", `{"current_region":"A1:A2"}`)
 	cellsA := toolOutputStub(testToken, "read", `{"ranges":[{"cells":[[{"value":"项"}],[{"value":"x"}]]}]}`)
 	regionB := toolOutputStub(testToken, "read", `{"current_region":"A1:A2"}`)
@@ -1279,6 +1282,153 @@ func TestTableGet_AllSheets(t *testing.T) {
 	}
 	if got[0] != "A" || got[1] != "B" {
 		t.Errorf("sheet names = %v, want [A B] in workbook order", got)
+	}
+}
+
+// ─── +table-get: used-range probe (the pro016 / pro025 fix) ───────────
+
+// anchorRecorderStub returns a BodyFilter-equipped reusable stub that records
+// the `range` field of every get_range_as_csv request, so a test can assert the
+// used-range probe spans the full physical grid rather than anchoring at A1.
+func anchorRecorderStub(token, outputJSON string, anchors *[]string) *httpmock.Stub {
+	s := toolOutputStub(token, "read", outputJSON)
+	s.Reusable = true
+	s.BodyFilter = func(body []byte) bool {
+		var wire struct {
+			ToolName string `json:"tool_name"`
+			Input    string `json:"input"`
+		}
+		if err := json.Unmarshal(body, &wire); err != nil || wire.ToolName != "get_range_as_csv" {
+			return false
+		}
+		var in struct {
+			Range string `json:"range"`
+		}
+		_ = json.Unmarshal([]byte(wire.Input), &in)
+		*anchors = append(*anchors, in.Range)
+		return true
+	}
+	return s
+}
+
+// TestTableGet_DefaultProbesFullGrid is the core regression for the pro016 /
+// pro025 incident: with no --range, the used-range probe must anchor over the
+// whole physical grid (A1:<lastCol><lastRow>) — not A1 — so current_region spans
+// internal blank rows/columns and the returned range is the true used range.
+func TestTableGet_DefaultProbesFullGrid(t *testing.T) {
+	t.Parallel()
+	// grid is 200×20 → last column index 19 → "T". The data spans an internal
+	// blank row (row 6) and blank column (D), so the true used range is A1:F10.
+	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"`+testSheetID+`","sheet_name":"S","row_count":200,"column_count":20,"index":0}]}`)
+	var anchors []string
+	region := anchorRecorderStub(testToken, `{"current_region":"A1:F10"}`, &anchors)
+	cells := toolOutputStub(testToken, "read", `{"ranges":[{"cells":[[{"value":"h"}],[{"value":"x"}]]}]}`)
+	out, err := runShortcutWithStubs(t, TableGet,
+		[]string{"--url", testURL, "--sheet-name", "S"}, structure, region, cells)
+	if err != nil {
+		t.Fatalf("execute failed: %v\nout=%s", err, out)
+	}
+	if len(anchors) != 1 || anchors[0] != "A1:T200" {
+		t.Fatalf("used-range probe anchor = %v, want one [A1:T200] (full grid, not A1)", anchors)
+	}
+	data := decodeEnvelopeData(t, out)
+	s0, _ := data["sheets"].([]interface{})[0].(map[string]interface{})
+	if s0["range"] != "A1:F10" {
+		t.Errorf("output range = %v, want A1:F10 (true used range reported back)", s0["range"])
+	}
+}
+
+// TestTableGet_UnknownDimsFallBackToA1 locks the fail-open path: when the
+// structure read doesn't report row_count / column_count, the probe degrades to
+// the legacy A1 anchor rather than building a bogus range or erroring.
+func TestTableGet_UnknownDimsFallBackToA1(t *testing.T) {
+	t.Parallel()
+	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"`+testSheetID+`","sheet_name":"S","index":0}]}`) // no row/col counts
+	var anchors []string
+	region := anchorRecorderStub(testToken, `{"current_region":"A1:B2"}`, &anchors)
+	cells := toolOutputStub(testToken, "read", `{"ranges":[{"cells":[[{"value":"h"}],[{"value":"x"}]]}]}`)
+	out, err := runShortcutWithStubs(t, TableGet,
+		[]string{"--url", testURL, "--sheet-name", "S"}, structure, region, cells)
+	if err != nil {
+		t.Fatalf("execute failed: %v\nout=%s", err, out)
+	}
+	if len(anchors) != 1 || anchors[0] != "A1" {
+		t.Fatalf("anchor = %v, want one [A1] (fallback when dims unknown)", anchors)
+	}
+}
+
+// TestTableGet_SheetIDBackfillsName: when only --sheet-id is given, the structure
+// read backfills the sheet's display name into the output spec (previously left
+// empty), a free win from now always reading the structure.
+func TestTableGet_SheetIDBackfillsName(t *testing.T) {
+	t.Parallel()
+	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"`+testSheetID+`","sheet_name":"销售","row_count":200,"column_count":20,"index":0}]}`)
+	region := toolOutputStub(testToken, "read", `{"current_region":"A1:A2"}`)
+	cells := toolOutputStub(testToken, "read", `{"ranges":[{"cells":[[{"value":"h"}],[{"value":"x"}]]}]}`)
+	out, err := runShortcutWithStubs(t, TableGet,
+		[]string{"--url", testURL, "--sheet-id", testSheetID}, structure, region, cells)
+	if err != nil {
+		t.Fatalf("execute failed: %v\nout=%s", err, out)
+	}
+	data := decodeEnvelopeData(t, out)
+	s0, _ := data["sheets"].([]interface{})[0].(map[string]interface{})
+	if s0["name"] != "销售" {
+		t.Errorf("name = %v, want 销售 (backfilled from structure)", s0["name"])
+	}
+}
+
+// TestTableGet_EmptySheetReportsEmptyRange: an empty sheet still carries a range
+// key (empty string) so callers can rely on the field always being present.
+func TestTableGet_EmptySheetReportsEmptyRange(t *testing.T) {
+	t.Parallel()
+	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"`+testSheetID+`","sheet_name":"S","row_count":200,"column_count":20,"index":0}]}`)
+	region := toolOutputStub(testToken, "read", `{}`) // no current_region → empty sheet
+	out, err := runShortcutWithStubs(t, TableGet,
+		[]string{"--url", testURL, "--sheet-name", "S"}, structure, region)
+	if err != nil {
+		t.Fatalf("execute failed: %v\nout=%s", err, out)
+	}
+	data := decodeEnvelopeData(t, out)
+	s0, _ := data["sheets"].([]interface{})[0].(map[string]interface{})
+	if r, has := s0["range"]; !has || r != "" {
+		t.Errorf("empty sheet range = %#v (has=%v), want \"\"", r, has)
+	}
+}
+
+// TestTablePut_AppendProbesFullGrid is the append-side mirror of the table-get
+// fix: lastDataRow must anchor its current_region probe over the whole grid so an
+// internal blank row doesn't make append land on top of (overwrite) later data.
+func TestTablePut_AppendProbesFullGrid(t *testing.T) {
+	t.Parallel()
+	// Existing data really ends at row 10 (a blank row 6 sits in the middle).
+	// Under an A1 anchor current_region would stop at row 5 and append would
+	// write to A6 — clobbering rows 7-10. The full-grid anchor reports A1:B10.
+	structure := toolOutputStub(testToken, "read", `{"sheets":[{"sheet_id":"`+testSheetID+`","sheet_name":"日志","row_count":200,"column_count":20,"index":0}]}`)
+	var anchors []string
+	region := anchorRecorderStub(testToken, `{"current_region":"A1:B10"}`, &anchors)
+	dims := toolOutputStub(testToken, "read", `{"range":"A1:T200"}`) // ensureSheetCapacity
+	dims.Reusable = true
+	write := toolOutputStub(testToken, "write", `{"ok":true}`)
+	out, err := runShortcutWithStubs(t, TablePut,
+		[]string{"--url", testURL, "--sheets",
+			`{"sheets":[{"name":"日志","mode":"append","columns":["时间","值"],"dtypes":{"值":"int64"},"data":[["t1",1]]}]}`},
+		structure, region, dims, write)
+	if err != nil {
+		t.Fatalf("execute failed: %v\nout=%s", err, out)
+	}
+	if len(anchors) != 1 || anchors[0] != "A1:T200" {
+		t.Fatalf("append last-data-row probe anchor = %v, want one [A1:T200]", anchors)
+	}
+	var wire map[string]interface{}
+	if err := json.Unmarshal(write.CapturedBody, &wire); err != nil {
+		t.Fatalf("decode captured write body: %v", err)
+	}
+	var input map[string]interface{}
+	if err := json.Unmarshal([]byte(wire["input"].(string)), &input); err != nil {
+		t.Fatalf("decode tool input: %v", err)
+	}
+	if input["range"] != "A11:B11" {
+		t.Errorf("append range = %v, want A11:B11 (below true last row 10, not on top of data past the blank row)", input["range"])
 	}
 }
 

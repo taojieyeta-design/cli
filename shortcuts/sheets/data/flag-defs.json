@@ -1380,7 +1380,7 @@
         "kind": "own",
         "type": "string",
         "required": "optional",
-        "desc": "A1 range to read; omit to read each sheet current region"
+        "desc": "A1 range to read; omit to read each sheet's full used range (spans internal blank rows/columns, not just the A1 current region)"
       },
       {
         "name": "no-header",

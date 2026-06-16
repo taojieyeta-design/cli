@@ -31,7 +31,7 @@
 - `--image-token`：复用**已存在**的图片 file_token。常见来源：① `+float-image-list` 返回的 `image_token`（适合"换皮不换位置"复用同一张图）；② `+cells-set-image` 成功返回里的 `file_token`（它也是 `sheet_image` 上传句柄）。适合"同一张图复用到多处"，省去重复上传。
 - `--image-uri`：图片 reference_id（image URI），由系统自动转 file_token。
 
-> ⚠️ **`--image` 仅 `+float-image-create` 支持**。`+float-image-update` 换图仍只接受 `--image-token` / `--image-uri`，而且**图片源是 update 唯一可省的部分**——三者全不传则保留原图。但 `--image-name` / `--position-{row,col}` / `--size-{width,height}` 在 update 时和 create 一样**必填**（`manage_float_image` 工具强制要求这套核心字段，且 `+float-image-list` 不回传 `image_name` 供 CLI 回填）。要在 update 里换一张本地新图，先用 `+cells-set-image` 上传到任意临时单元格、从返回取 `file_token`，再把它传给 update 的 `--image-token`。
+> ⚠️ **`--image` 仅 `+float-image-create` 支持**。`+float-image-update` 换图仍只接受 `--image-token` / `--image-uri`，而且**图片源是 update 唯一可省的部分**——三者全不传则保留原图。但 `--image-name` / `--position-{row,col}` / `--size-{width,height}` 在 update 时和 create 一样**必填**（`+float-image-update` 强制要求这套核心字段，且 `+float-image-list` 不回传 `image_name` 供 CLI 回填）。要在 update 里换一张本地新图，先用 `+cells-set-image` 上传到任意临时单元格、从返回取 `file_token`，再把它传给 update 的 `--image-token`。
 
 ## Shortcuts
 
@@ -130,7 +130,7 @@ lark-cli sheets +float-image-create --url "..." --sheet-id "$SID" \
 
 ### `+float-image-update`
 
-> **update ≈ create，只有图片源可省**：`manage_float_image` 工具的 update 要求和 create 相同的核心字段——`--image-name`、`--position-{row,col}`、`--size-{width,height}` **全部必填**；唯一区别是**图片源（`--image-token` / `--image-uri`）可以全省**，省略即保留原图。这**不是**"只发改动字段"的 patch：缺任一核心字段会被工具拒绝（`+float-image-list` 不回传 `image_name`，CLI 无法替你回填）。
+> **update ≈ create，只有图片源可省**：`+float-image-update` 的 update 要求和 create 相同的核心字段——`--image-name`、`--position-{row,col}`、`--size-{width,height}` **全部必填**；唯一区别是**图片源（`--image-token` / `--image-uri`）可以全省**，省略即保留原图。这**不是**"只发改动字段"的 patch：缺任一核心字段会被拒绝（`+float-image-list` 不回传 `image_name`，CLI 无法替你回填）。
 >
 > 推荐流程：先 `+float-image-list --float-image-id <id>` 回读当前 position / size，再带上 `--image-name` 和完整的 position / size 调一次 `+float-image-update`。
 
