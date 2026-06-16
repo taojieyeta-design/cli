@@ -20,6 +20,10 @@ import (
 	"github.com/larksuite/cli/internal/transport"
 )
 
+// newRegistrationHTTPClient builds the HTTP client used for app-registration
+// traffic. It is a package var so tests can inject a stub transport.
+var newRegistrationHTTPClient = func() *http.Client { return transport.NewHTTPClient(0) }
+
 // initNoWaitHint is the agent-facing guidance embedded in the --no-wait JSON
 // output, mirroring the two-step contract of `auth login --no-wait`.
 const initNoWaitHint = "**Generate AND display the QR code:** call `lark-cli auth qrcode <verification_url>` and show it (PNG via --output; ASCII via --ascii only if the user asks). " +
@@ -36,7 +40,7 @@ func initiateNoWaitAppRegistration(opts *ConfigInitOptions, existing *core.Multi
 	f := opts.Factory
 	brand := parseBrand(opts.Brand)
 
-	httpClient := transport.NewHTTPClient(0)
+	httpClient := newRegistrationHTTPClient()
 	authResp, err := larkauth.RequestAppRegistration(httpClient, brand, f.IOStreams.ErrOut)
 	if err != nil {
 		return errs.NewConfigError(errs.SubtypeInvalidClient, "app registration failed: %v", err).WithCause(err)
@@ -132,7 +136,7 @@ func resumeAppRegistration(opts *ConfigInitOptions) error {
 		interval = 5
 	}
 
-	httpClient := transport.NewHTTPClient(0)
+	httpClient := newRegistrationHTTPClient()
 	result, pollErr := pollAppRegistrationResume(opts.Ctx, httpClient, opts.DeviceCode, interval, int(remaining), f.IOStreams.ErrOut)
 	if pollErr != nil {
 		// Clear the cache only on terminal failures (denied / expired /

@@ -5,9 +5,13 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +20,40 @@ import (
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/internal/core"
 )
+
+// stubRT returns a single canned HTTP response for every request.
+type stubRT struct {
+	status int
+	body   string
+}
+
+func (s stubRT) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: s.status, Body: io.NopCloser(strings.NewReader(s.body)), Header: make(http.Header)}, nil
+}
+
+// seqRT returns successive canned responses (last one repeats), for flows that
+// poll more than once (e.g. the Lark-tenant re-poll).
+type seqRT struct {
+	bodies []string
+	i      int
+}
+
+func (s *seqRT) RoundTrip(*http.Request) (*http.Response, error) {
+	idx := s.i
+	if idx >= len(s.bodies) {
+		idx = len(s.bodies) - 1
+	}
+	s.i++
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(s.bodies[idx])), Header: make(http.Header)}, nil
+}
+
+// withStubRegistrationClient swaps the registration HTTP client for the test.
+func withStubRegistrationClient(t *testing.T, rt http.RoundTripper) {
+	t.Helper()
+	orig := newRegistrationHTTPClient
+	newRegistrationHTTPClient = func() *http.Client { return &http.Client{Transport: rt} }
+	t.Cleanup(func() { newRegistrationHTTPClient = orig })
+}
 
 // --- cache round-trip ---
 
@@ -155,6 +193,112 @@ func TestAppRegShouldClearCache(t *testing.T) {
 		if got := appRegShouldClearCache(c.err); got != c.want {
 			t.Errorf("%s: appRegShouldClearCache = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// --- initiate (stubbed registration client) ---
+
+func TestInitiateNoWaitAppRegistration_WritesCacheAndJSON(t *testing.T) {
+	t.Setenv("LARKSUITE_CLI_CONFIG_DIR", t.TempDir())
+	f, stdout, _, _ := cmdutil.TestFactory(t, nil)
+	withStubRegistrationClient(t, stubRT{200, `{"device_code":"dc-abc","user_code":"U-1","verification_uri":"https://open.feishu.cn","expires_in":3600,"interval":5}`})
+
+	opts := &ConfigInitOptions{Factory: f, Ctx: context.Background(), Brand: "feishu", New: true, NoWait: true, ForceInit: true}
+	if err := initiateNoWaitAppRegistration(opts, nil); err != nil {
+		t.Fatalf("initiate: %v", err)
+	}
+
+	var out map[string]interface{}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("stdout not JSON: %v; raw=%s", err, stdout.String())
+	}
+	if out["device_code"] != "dc-abc" {
+		t.Errorf("device_code = %v, want dc-abc", out["device_code"])
+	}
+	args, ok := out["resume_args"].([]interface{})
+	if !ok || len(args) == 0 || args[len(args)-1] != "--force-init" {
+		t.Errorf("resume_args should end with --force-init, got %v", out["resume_args"])
+	}
+
+	rec, _ := loadInitNoWaitRecord("dc-abc")
+	if rec == nil {
+		t.Fatal("cache record not written")
+	}
+	if rec.Brand != "feishu" || rec.Version != initNoWaitCacheVersion {
+		t.Errorf("cache record = %+v", *rec)
+	}
+}
+
+// --- pollAppRegistrationResume (stubbed client) ---
+
+func TestPollAppRegistrationResume_Success(t *testing.T) {
+	c := &http.Client{Transport: stubRT{200, `{"client_id":"cli_x","client_secret":"sec","user_info":{"tenant_brand":"feishu"}}`}}
+	res, err := pollAppRegistrationResume(context.Background(), c, "dc", 0, 60, io.Discard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ClientID != "cli_x" || res.ClientSecret != "sec" {
+		t.Errorf("got %+v", res)
+	}
+}
+
+func TestPollAppRegistrationResume_MissingSecret(t *testing.T) {
+	c := &http.Client{Transport: stubRT{200, `{"client_id":"cli_x"}`}}
+	if _, err := pollAppRegistrationResume(context.Background(), c, "dc", 0, 60, io.Discard); err == nil {
+		t.Error("expected error when client_secret is missing")
+	}
+}
+
+func TestPollAppRegistrationResume_LarkRetry(t *testing.T) {
+	// First poll (feishu endpoint): lark tenant, no secret -> triggers re-poll
+	// against the lark endpoint, which returns the secret.
+	rt := &seqRT{bodies: []string{
+		`{"client_id":"cli_x","client_secret":"","user_info":{"tenant_brand":"lark"}}`,
+		`{"client_id":"cli_x","client_secret":"larksec","user_info":{"tenant_brand":"lark"}}`,
+	}}
+	res, err := pollAppRegistrationResume(context.Background(), &http.Client{Transport: rt}, "dc", 0, 60, io.Discard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.ClientSecret != "larksec" {
+		t.Errorf("expected lark re-poll to yield the secret, got %+v", res)
+	}
+}
+
+// Full resume happy path: stubbed poll succeeds, the app is persisted, and the
+// cache is cleared. (runProbe hits the factory's mock client, which has no stub
+// and returns an untyped error that runProbe swallows.)
+func TestResumeAppRegistration_Success(t *testing.T) {
+	t.Setenv("LARKSUITE_CLI_CONFIG_DIR", t.TempDir())
+	f, stdout, _, _ := cmdutil.TestFactory(t, nil)
+	withStubRegistrationClient(t, stubRT{200, `{"client_id":"cli_new","client_secret":"sec","user_info":{"tenant_brand":"feishu"}}`})
+
+	const dc = "resume-ok"
+	rec := initNoWaitRecord{
+		Version:      initNoWaitCacheVersion,
+		Brand:        "feishu",
+		Interval:     1, // keep the single poll fast
+		ExpiresAt:    time.Now().Unix() + 300,
+		ConfigDigest: computeConfigDigest(nil),
+	}
+	if err := saveInitNoWaitRecord(dc, rec); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	opts := &ConfigInitOptions{Factory: f, Ctx: context.Background(), DeviceCode: dc}
+	if err := resumeAppRegistration(opts); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	cfg, _ := core.LoadMultiAppConfig()
+	if cfg == nil || cfg.CurrentAppConfig("") == nil || cfg.CurrentAppConfig("").AppId != "cli_new" {
+		t.Errorf("config not persisted with new app id: %+v", cfg)
+	}
+	if got, _ := loadInitNoWaitRecord(dc); got != nil {
+		t.Error("cache should be cleared after a successful save")
+	}
+	if !strings.Contains(stdout.String(), "cli_new") {
+		t.Errorf("stdout missing new appId: %s", stdout.String())
 	}
 }
 
