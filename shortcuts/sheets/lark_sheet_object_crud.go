@@ -51,10 +51,18 @@ type objectCRUDSpec struct {
 	enhanceCreateInput func(rt flagView, input map[string]interface{})
 	enhanceUpdateInput func(rt flagView, input map[string]interface{})
 	// validateCreateInput, when set, runs after enhanceCreateInput to
-	// enforce *cross-flag, create-only* constraints JSON Schema can't
-	// express (e.g. pivot rejects --target-position vs --range when
-	// both carry non-default values — they map to the same wire field
-	// and conflicting values are ambiguous). Mirrors validateUpdateInput.
+	// enforce cross-flag / cross-field, create-only constraints JSON
+	// Schema can't express. Two uses today:
+	//   - pivot rejects --target-position vs --range when both carry
+	//     non-default values — they map to the same wire field and
+	//     conflicting values are ambiguous (needs raw flags via rt).
+	//   - cond-format requires every properties.attrs entry to match the
+	//     sibling rule_type's shape (see validateCondFormatAttrs); a
+	//     colorScale rule fed cellIs-shaped attrs writes a color-less
+	//     segment that breaks the sheet on open (inspects input only).
+	// It is the create-path twin of validateUpdateInput; the same scope
+	// notes apply. Validators that only inspect the wire input can ignore
+	// the rt argument.
 	validateCreateInput func(rt flagView, input map[string]interface{}) error
 	// validateUpdateInput, when set, runs after enhanceUpdateInput to
 	// enforce *cross-field, update-only* constraints JSON Schema can't
@@ -65,12 +73,6 @@ type objectCRUDSpec struct {
 	// against data/flag-schemas.json in objectCreateInput /
 	// objectUpdateInput via validatePropertiesAgainstSchema.
 	validateUpdateInput func(input map[string]interface{}) error
-	// validateCreateInput is the create-path twin of validateUpdateInput:
-	// it runs after enhanceCreateInput to enforce cross-field rules JSON
-	// Schema can't express (e.g. cond-format's attrs shape must match the
-	// sibling rule_type — see validateCondFormatAttrs). Same scope notes
-	// as validateUpdateInput apply.
-	validateCreateInput func(input map[string]interface{}) error
 	// allowEmptySheetSelectorOnCreate, when true, makes the *create*
 	// shortcut accept empty --sheet-id / --sheet-name (backend then picks
 	// the placement target — e.g. manage_pivot_table_object auto-creates
@@ -210,11 +212,6 @@ func objectCreateInput(runtime flagView, token, sheetID, sheetName string, spec 
 	}
 	if err := validateInputAgainstSchema(runtime, input); err != nil {
 		return nil, err
-	}
-	if spec.validateCreateInput != nil {
-		if err := spec.validateCreateInput(input); err != nil {
-			return nil, err
-		}
 	}
 	return input, nil
 }
@@ -517,13 +514,17 @@ var condFormatEnhance = func(rt flagView, input map[string]interface{}) {
 }
 
 var condFormatSpec = objectCRUDSpec{
-	commandPrefix:       "+cond-format",
-	toolName:            "manage_conditional_format_object",
-	idFlag:              "rule-id",
-	idField:             "conditional_format_id",
-	enhanceCreateInput:  condFormatEnhance,
-	enhanceUpdateInput:  condFormatEnhance,
-	validateCreateInput: validateCondFormatAttrs,
+	commandPrefix:      "+cond-format",
+	toolName:           "manage_conditional_format_object",
+	idFlag:             "rule-id",
+	idField:            "conditional_format_id",
+	enhanceCreateInput: condFormatEnhance,
+	enhanceUpdateInput: condFormatEnhance,
+	// validateCondFormatAttrs only inspects the wire input, so the create
+	// hook ignores rt; the update hook (func(input)) calls it directly.
+	validateCreateInput: func(_ flagView, input map[string]interface{}) error {
+		return validateCondFormatAttrs(input)
+	},
 	validateUpdateInput: validateCondFormatAttrs,
 }
 
@@ -630,6 +631,7 @@ func condAttrPresentKeys(entry map[string]interface{}) string {
 	sort.Strings(keys)
 	return "{" + strings.Join(keys, ",") + "}"
 }
+
 var CondFormatCreate = newObjectCreateShortcut(condFormatSpec)
 var CondFormatUpdate = newObjectUpdateShortcut(condFormatSpec)
 var CondFormatDelete = newObjectDeleteShortcut(condFormatSpec)
