@@ -34,6 +34,7 @@ var DriveExport = common.Shortcut{
 		{Name: "doc-type", Desc: "source document type: doc | docx | sheet | bitable | slides", Required: true, Enum: []string{"doc", "docx", "sheet", "bitable", "slides"}},
 		{Name: "file-extension", Desc: "export format: docx | pdf | xlsx | csv | markdown | base (bitable only) | pptx (slides only)", Required: true, Enum: []string{"docx", "pdf", "xlsx", "csv", "markdown", "base", "pptx"}},
 		{Name: "sub-id", Desc: "sub-table/sheet ID, required when exporting sheet/bitable as csv"},
+		{Name: "only-schema", Type: "bool", Desc: "export only bitable schema when --doc-type bitable --file-extension base"},
 		{Name: "file-name", Desc: "preferred output filename (optional)"},
 		{Name: "output-dir", Default: ".", Desc: "local output directory (default: current directory)"},
 		{Name: "overwrite", Type: "bool", Desc: "overwrite existing output file"},
@@ -59,6 +60,7 @@ type ExportParams struct {
 	DocType       string
 	FileExtension string
 	SubID         string
+	OnlySchema    bool
 	OutputDir     string
 	FileName      string
 	Overwrite     bool
@@ -70,6 +72,7 @@ func (p ExportParams) spec() driveExportSpec {
 		DocType:       p.DocType,
 		FileExtension: p.FileExtension,
 		SubID:         p.SubID,
+		OnlySchema:    p.OnlySchema,
 	}
 }
 
@@ -88,6 +91,7 @@ func exportParamsFromFlags(runtime *common.RuntimeContext) ExportParams {
 		DocType:       runtime.Str("doc-type"),
 		FileExtension: runtime.Str("file-extension"),
 		SubID:         runtime.Str("sub-id"),
+		OnlySchema:    runtime.Bool("only-schema"),
 		OutputDir:     outputDir,
 		FileName:      strings.TrimSpace(runtime.Str("file-name")),
 		Overwrite:     runtime.Bool("overwrite"),
@@ -126,6 +130,9 @@ func PlanExportDryRun(runtime *common.RuntimeContext, p ExportParams) *common.Dr
 	}
 	if strings.TrimSpace(spec.SubID) != "" {
 		body["sub_id"] = spec.SubID
+	}
+	if spec.OnlySchema {
+		body["only_schema"] = true
 	}
 
 	dr := common.NewDryRunAPI().

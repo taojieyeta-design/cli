@@ -25,7 +25,8 @@ var DriveImport = common.Shortcut{
 		"docs:document.media:upload",
 		"docs:document:import",
 	},
-	AuthTypes: []string{"user", "bot"},
+	ConditionalScopes: []string{"wiki:node:retrieve"},
+	AuthTypes:         []string{"user", "bot"},
 	Flags: []common.Flag{
 		{Name: "file", Desc: "local file path (e.g. .docx, .xlsx, .md, .base, .pptx; large files auto use multipart upload; .base is capped at 20MB, .pptx at 500MB)", Required: true},
 		{Name: "type", Desc: "target document type (docx, sheet, bitable, slides)", Required: true},
@@ -96,6 +97,7 @@ func PlanImportDryRun(runtime *common.RuntimeContext, p ImportParams) *common.Dr
 	dry := common.NewDryRunAPI()
 	dry.Desc("Upload file (single-part or multipart) -> create import task -> poll status")
 
+	appendDriveImportFolderTokenWikiCheckDryRun(dry, spec)
 	appendDriveImportUploadDryRun(dry, spec, fileSize)
 
 	dry.POST("/open-apis/drive/v1/import_tasks").
@@ -118,6 +120,9 @@ func PlanImportDryRun(runtime *common.RuntimeContext, p ImportParams) *common.Dr
 func RunImport(ctx context.Context, runtime *common.RuntimeContext, p ImportParams) error {
 	spec := p.spec()
 	if _, err := preflightDriveImportFile(runtime.FileIO(), &spec); err != nil {
+		return err
+	}
+	if err := rejectDriveImportWikiFolderToken(runtime, spec.FolderToken); err != nil {
 		return err
 	}
 
