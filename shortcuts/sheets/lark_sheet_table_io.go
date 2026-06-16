@@ -100,12 +100,12 @@ func resolveTablePayload(rctx *common.RuntimeContext) (*tablePayload, error) {
 	sheetsGiven := rctx.Changed("sheets") && strings.TrimSpace(rctx.Str("sheets")) != ""
 	dfGiven := rctx.Changed("dataframe") && strings.TrimSpace(rctx.Str("dataframe")) != ""
 	if sheetsGiven && dfGiven {
-		return nil, common.FlagErrorf("--sheets and --dataframe are mutually exclusive")
+		return nil, common.ValidationErrorf("--sheets and --dataframe are mutually exclusive")
 	}
 	if !sheetsGiven && !dfGiven {
 		// Mirror the original "--sheets is required" message but list both
 		// alternatives so users discover the binary entry from the error.
-		return nil, common.FlagErrorf("one of --sheets or --dataframe is required")
+		return nil, common.ValidationErrorf("one of --sheets or --dataframe is required")
 	}
 	if dfGiven {
 		return parseDataframePayload(rctx)
@@ -243,7 +243,7 @@ func typeToDtype(typ string) string {
 func parseTablePutPayload(runtime flagView) (*tablePayload, error) {
 	raw := strings.TrimSpace(runtime.Str("sheets"))
 	if raw == "" {
-		return nil, common.FlagErrorf("--sheets is required")
+		return nil, common.ValidationErrorf("--sheets is required")
 	}
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.UseNumber()
@@ -251,7 +251,7 @@ func parseTablePutPayload(runtime flagView) (*tablePayload, error) {
 		Sheets []tableSheetIn `json:"sheets"`
 	}
 	if err := dec.Decode(&wire); err != nil {
-		return nil, common.FlagErrorf("--sheets: invalid JSON: %v", err)
+		return nil, common.ValidationErrorf("--sheets: invalid JSON: %v", err)
 	}
 	p := &tablePayload{Sheets: make([]tableSheetSpec, 0, len(wire.Sheets))}
 	for i := range wire.Sheets {
@@ -287,10 +287,10 @@ func (in *tableSheetIn) normalize(idx int) (tableSheetSpec, error) {
 	for j, name := range in.Columns {
 		trimmed := strings.TrimSpace(name)
 		if trimmed == "" {
-			return tableSheetSpec{}, common.FlagErrorf("--sheets[%d] %q: columns[%d] name is required", idx, in.Name, j)
+			return tableSheetSpec{}, common.ValidationErrorf("--sheets[%d] %q: columns[%d] name is required", idx, in.Name, j)
 		}
 		if seenCol[name] {
-			return tableSheetSpec{}, common.FlagErrorf("--sheets[%d] %q: duplicate column name %q", idx, in.Name, name)
+			return tableSheetSpec{}, common.ValidationErrorf("--sheets[%d] %q: duplicate column name %q", idx, in.Name, name)
 		}
 		seenCol[name] = true
 		typ, format := dtypeToTypeFormat(in.Dtypes[name])
@@ -306,12 +306,12 @@ func (in *tableSheetIn) normalize(idx int) (tableSheetSpec, error) {
 	// compare against the canonical set.
 	for k := range in.Dtypes {
 		if !seenCol[k] {
-			return tableSheetSpec{}, common.FlagErrorf("--sheets[%d] %q: dtypes references unknown column %q", idx, in.Name, k)
+			return tableSheetSpec{}, common.ValidationErrorf("--sheets[%d] %q: dtypes references unknown column %q", idx, in.Name, k)
 		}
 	}
 	for k := range in.Formats {
 		if !seenCol[k] {
-			return tableSheetSpec{}, common.FlagErrorf("--sheets[%d] %q: formats references unknown column %q", idx, in.Name, k)
+			return tableSheetSpec{}, common.ValidationErrorf("--sheets[%d] %q: formats references unknown column %q", idx, in.Name, k)
 		}
 	}
 	return spec, nil
@@ -319,20 +319,20 @@ func (in *tableSheetIn) normalize(idx int) (tableSheetSpec, error) {
 
 func (p *tablePayload) validate() error {
 	if len(p.Sheets) == 0 {
-		return common.FlagErrorf("--sheets: must contain at least one sheet")
+		return common.ValidationErrorf("--sheets: must contain at least one sheet")
 	}
 	seen := make(map[string]bool, len(p.Sheets))
 	for i := range p.Sheets {
 		s := &p.Sheets[i]
 		if strings.TrimSpace(s.Name) == "" {
-			return common.FlagErrorf("--sheets[%d]: name is required", i)
+			return common.ValidationErrorf("--sheets[%d]: name is required", i)
 		}
 		if seen[s.Name] {
-			return common.FlagErrorf("--sheets[%d]: duplicate sheet name %q", i, s.Name)
+			return common.ValidationErrorf("--sheets[%d]: duplicate sheet name %q", i, s.Name)
 		}
 		seen[s.Name] = true
 		if len(s.Columns) == 0 {
-			return common.FlagErrorf("--sheets[%d] %q: columns must be non-empty", i, s.Name)
+			return common.ValidationErrorf("--sheets[%d] %q: columns must be non-empty", i, s.Name)
 		}
 		for j := range s.Columns {
 			c := &s.Columns[j]
@@ -341,13 +341,13 @@ func (p *tablePayload) validate() error {
 			// tableSheetSpec) can't silently route an unknown type into
 			// buildTypedCell's default branch.
 			if !validColumnType(c.Type) {
-				return common.FlagErrorf("--sheets[%d] %q: columns[%d] %q has invalid type %q (want string/number/date/bool)",
+				return common.ValidationErrorf("--sheets[%d] %q: columns[%d] %q has invalid type %q (want string/number/date/bool)",
 					i, s.Name, j, c.Name, c.Type)
 			}
 		}
 		for r := range s.Rows {
 			if len(s.Rows[r]) != len(s.Columns) {
-				return common.FlagErrorf("--sheets[%d] %q: row %d has %d cells, want %d (column count)",
+				return common.ValidationErrorf("--sheets[%d] %q: row %d has %d cells, want %d (column count)",
 					i, s.Name, r, len(s.Rows[r]), len(s.Columns))
 			}
 			// Validate each cell's value against its column type up front (pure,
@@ -356,19 +356,19 @@ func (p *tablePayload) validate() error {
 			// stray empty spreadsheet behind.
 			for c := range s.Columns {
 				if _, err := buildTypedCell(&s.Columns[c], s.Rows[r][c]); err != nil {
-					return common.FlagErrorf("--sheets[%d] %q: row %d column %q: %v", i, s.Name, r, s.Columns[c].Name, err)
+					return common.ValidationErrorf("--sheets[%d] %q: row %d column %q: %v", i, s.Name, r, s.Columns[c].Name, err)
 				}
 			}
 		}
 		if sc := strings.TrimSpace(s.StartCell); sc != "" {
 			if _, _, ok := splitCellRef(sc); !ok {
-				return common.FlagErrorf("--sheets[%d] %q: start_cell %q must be a single cell ref (e.g. A1)", i, s.Name, sc)
+				return common.ValidationErrorf("--sheets[%d] %q: start_cell %q must be a single cell ref (e.g. A1)", i, s.Name, sc)
 			}
 		}
 		switch s.Mode {
 		case "", "overwrite", "append":
 		default:
-			return common.FlagErrorf("--sheets[%d] %q: mode %q is invalid (want \"overwrite\" or \"append\")", i, s.Name, s.Mode)
+			return common.ValidationErrorf("--sheets[%d] %q: mode %q is invalid (want \"overwrite\" or \"append\")", i, s.Name, s.Mode)
 		}
 	}
 	return nil
@@ -420,7 +420,7 @@ func buildSheetMatrix(s *tableSheetSpec, writeHeader bool) ([][]interface{}, err
 		for c := range s.Columns {
 			cell, err := buildTypedCell(&s.Columns[c], s.Rows[r][c])
 			if err != nil {
-				return nil, common.FlagErrorf("sheet %q row %d column %q: %v", s.Name, r, s.Columns[c].Name, err)
+				return nil, common.ValidationErrorf("sheet %q row %d column %q: %v", s.Name, r, s.Columns[c].Name, err)
 			}
 			row[c] = cell
 		}
@@ -467,19 +467,19 @@ func buildTypedCell(col *tableColumnSpec, raw interface{}) (map[string]interface
 	case "number":
 		n, ok := raw.(json.Number)
 		if !ok {
-			return nil, fmt.Errorf("number expects a numeric value, got %s", describeJSONType(raw))
+			return nil, fmt.Errorf("number expects a numeric value, got %s", describeJSONType(raw)) //nolint:forbidigo // intermediate error; callers wrap it into a typed --sheets/--values validation error with row/column context
 		}
 		cell["value"] = n
 	case "bool":
 		b, ok := raw.(bool)
 		if !ok {
-			return nil, fmt.Errorf("bool expects true/false, got %s", describeJSONType(raw))
+			return nil, fmt.Errorf("bool expects true/false, got %s", describeJSONType(raw)) //nolint:forbidigo // intermediate error; callers wrap it into a typed --sheets/--values validation error with row/column context
 		}
 		cell["value"] = b
 	case "date":
 		str, ok := raw.(string)
 		if !ok {
-			return nil, fmt.Errorf("date expects an ISO yyyy-mm-dd string, got %s", describeJSONType(raw))
+			return nil, fmt.Errorf("date expects an ISO yyyy-mm-dd string, got %s", describeJSONType(raw)) //nolint:forbidigo // intermediate error; callers wrap it into a typed --sheets/--values validation error with row/column context
 		}
 		serial, err := isoDateToSerial(str)
 		if err != nil {
@@ -487,7 +487,7 @@ func buildTypedCell(col *tableColumnSpec, raw interface{}) (map[string]interface
 		}
 		cell["value"] = serial
 	default:
-		return nil, fmt.Errorf("unsupported type %q", col.Type)
+		return nil, fmt.Errorf("unsupported type %q", col.Type) //nolint:forbidigo // intermediate error; callers wrap it into a typed --sheets/--values validation error with row/column context
 	}
 	return cell, nil
 }
@@ -552,7 +552,7 @@ func isoDateToSerial(s string) (int, error) {
 	}
 	t, err := time.Parse("2006-01-02", s)
 	if err != nil {
-		return 0, fmt.Errorf("date %q must be ISO yyyy-mm-dd: %v", s, err)
+		return 0, fmt.Errorf("date %q must be ISO yyyy-mm-dd: %v", s, err) //nolint:forbidigo // intermediate error; callers wrap it into a typed --sheets/--values validation error with row/column context
 	}
 	return int(math.Round(t.Sub(excelEpoch).Hours() / 24)), nil
 }
@@ -574,7 +574,7 @@ func sheetAnchor(s *tableSheetSpec) (anchor string, col0, row0 int, err error) {
 	}
 	c, r, ok := splitCellRef(anchor)
 	if !ok {
-		return "", 0, 0, common.FlagErrorf("start_cell %q must be a single cell ref (e.g. A1)", anchor)
+		return "", 0, 0, common.ValidationErrorf("start_cell %q must be a single cell ref (e.g. A1)", anchor)
 	}
 	return anchor, c, r, nil
 }
@@ -611,7 +611,7 @@ func writeSheetData(ctx context.Context, runtime *common.RuntimeContext, token, 
 	if s.Mode == "append" {
 		lastRow, err := lastDataRow(ctx, runtime, token, sheetID, dims)
 		if err != nil {
-			return nil, fmt.Errorf("resolving last data row for append: %w", err)
+			return nil, fmt.Errorf("resolving last data row for append: %w", err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 		}
 		if lastRow > 0 {
 			baseRow = lastRow // 0-based index of the row just below the 1-based last data row
@@ -646,7 +646,7 @@ func writeSheetData(ctx context.Context, runtime *common.RuntimeContext, token, 
 	// sheet bounds. Best-effort: if reading dims fails the downstream write
 	// will surface the same out-of-bounds error it did before this helper.
 	if err := ensureSheetCapacity(ctx, runtime, token, sheetID, baseRow+len(matrix), col0+ncols); err != nil {
-		return nil, fmt.Errorf("ensuring sheet capacity: %w", err)
+		return nil, fmt.Errorf("ensuring sheet capacity: %w", err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 	}
 
 	startCol := columnIndexToLetter(col0)
@@ -675,12 +675,12 @@ func writeSheetData(ctx context.Context, runtime *common.RuntimeContext, token, 
 			input["allow_overwrite"] = false
 		}
 		if _, err := callTool(ctx, runtime, token, ToolKindWrite, "set_cell_range", input); err != nil {
-			return nil, fmt.Errorf("writing rows %d-%d: %w", start+1, end, err)
+			return nil, fmt.Errorf("writing rows %d-%d: %w", start+1, end, err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 		}
 		writes++
 	}
 	if err := applyWorkbookCreateVisualOps(ctx, runtime, token, sheetID, styles); err != nil {
-		return nil, fmt.Errorf("applying visual styles: %w", err)
+		return nil, fmt.Errorf("applying visual styles: %w", err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 	}
 	return map[string]interface{}{
 		"name":      s.Name,
@@ -768,7 +768,7 @@ func writeTypedSheets(ctx context.Context, runtime *common.RuntimeContext, token
 		first := payload.Sheets[0].Name
 		if _, exists := byName[first]; !exists {
 			if err := renameSheet(ctx, runtime, token, adoptSheetID, first); err != nil {
-				return nil, fmt.Errorf("adopting the default sheet as %q failed: %w", first, err)
+				return nil, fmt.Errorf("adopting the default sheet as %q failed: %w", first, err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 			}
 			byName[first] = adoptSheetID
 		}
@@ -782,7 +782,7 @@ func writeTypedSheets(ctx context.Context, runtime *common.RuntimeContext, token
 			rows, cols := sheetCreateDims(s)
 			sheetID, err = createSheet(ctx, runtime, token, s.Name, rows, cols)
 			if err != nil {
-				return written, fmt.Errorf("creating sheet %q failed: %w", s.Name, err)
+				return written, fmt.Errorf("creating sheet %q failed: %w", s.Name, err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 			}
 			byName[s.Name] = sheetID
 			// A freshly created sheet's grid is exactly what we just asked for.
@@ -790,7 +790,7 @@ func writeTypedSheets(ctx context.Context, runtime *common.RuntimeContext, token
 		}
 		summary, err := writeSheetData(ctx, runtime, token, sheetID, s, styles.styleFor(i), dimsByName[s.Name])
 		if err != nil {
-			return written, fmt.Errorf("writing sheet %q failed: %w", s.Name, err)
+			return written, fmt.Errorf("writing sheet %q failed: %w", s.Name, err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 		}
 		written = append(written, summary)
 	}
@@ -851,7 +851,7 @@ func createSheet(ctx context.Context, runtime *common.RuntimeContext, token, nam
 	}
 	id, _, err := lookupSheetIndex(ctx, runtime, token, "", name)
 	if err != nil {
-		return "", fmt.Errorf("sheet %q created but resolving its id failed: %w", name, err)
+		return "", fmt.Errorf("sheet %q created but resolving its id failed: %w", name, err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 	}
 	return id, nil
 }
@@ -941,7 +941,7 @@ func ensureSheetCapacity(ctx context.Context, runtime *common.RuntimeContext, to
 				"count":     target - curRows,
 			}
 			if _, err := callTool(ctx, runtime, token, ToolKindWrite, "modify_sheet_structure", input); err != nil {
-				return fmt.Errorf("growing rows %d → %d: %w", curRows, target, err)
+				return fmt.Errorf("growing rows %d → %d: %w", curRows, target, err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 			}
 		}
 	}
@@ -961,7 +961,7 @@ func ensureSheetCapacity(ctx context.Context, runtime *common.RuntimeContext, to
 				"count":     target - curCols,
 			}
 			if _, err := callTool(ctx, runtime, token, ToolKindWrite, "modify_sheet_structure", input); err != nil {
-				return fmt.Errorf("growing cols %d → %d: %w", curCols, target, err)
+				return fmt.Errorf("growing cols %d → %d: %w", curCols, target, err) //nolint:forbidigo // intermediate error; surfaced as a partial_success message string via tablePutPartial, not a typed final error
 			}
 		}
 	}
@@ -1113,7 +1113,7 @@ var TableGet = common.Shortcut{
 			return err
 		}
 		if strings.TrimSpace(runtime.Str("sheet-id")) != "" && strings.TrimSpace(runtime.Str("sheet-name")) != "" {
-			return common.FlagErrorf("--sheet-id and --sheet-name are mutually exclusive")
+			return common.ValidationErrorf("--sheet-id and --sheet-name are mutually exclusive")
 		}
 		// --dataframe-out is Arrow IPC, which carries one schema per file — a
 		// whole-workbook read can't ride that shape. Surface the constraint
@@ -1121,7 +1121,7 @@ var TableGet = common.Shortcut{
 		// encode.
 		if strings.TrimSpace(runtime.Str("dataframe-out")) != "" {
 			if strings.TrimSpace(runtime.Str("sheet-id")) == "" && strings.TrimSpace(runtime.Str("sheet-name")) == "" {
-				return common.FlagErrorf("--dataframe-out requires --sheet-id or --sheet-name (single-sheet only); for the whole workbook, drop --dataframe-out and use the default JSON output")
+				return common.ValidationErrorf("--dataframe-out requires --sheet-id or --sheet-name (single-sheet only); for the whole workbook, drop --dataframe-out and use the default JSON output")
 			}
 		}
 		return nil
@@ -1176,7 +1176,7 @@ var TableGet = common.Shortcut{
 			spec, _ := sheets[0].(map[string]interface{})
 			data, err := encodeSheetMapToArrowIPC(spec)
 			if err != nil {
-				return common.FlagErrorf("--dataframe-out: encode arrow: %v", err)
+				return common.ValidationErrorf("--dataframe-out: encode arrow: %v", err)
 			}
 			if err := writeDataframeOut(runtime, dfOut, data); err != nil {
 				return err

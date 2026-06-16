@@ -424,7 +424,7 @@ var pivotSpec = objectCRUDSpec{
 		pos := strings.TrimSpace(rt.Str("target-position"))
 		rng := strings.TrimSpace(rt.Str("range"))
 		if pos != "" && pos != "A1" && rng != "" {
-			return common.FlagErrorf("--target-position and --range are mutually exclusive (both map to properties.range; pass only one)")
+			return common.ValidationErrorf("--target-position and --range are mutually exclusive (both map to properties.range; pass only one)")
 		}
 		return nil
 	},
@@ -594,7 +594,7 @@ func validateCondFormatAttrs(input map[string]interface{}) error {
 		}
 		for _, key := range required {
 			if v, has := entry[key]; !has || condAttrIsBlank(v) {
-				return common.FlagErrorf(
+				return common.ValidationErrorf(
 					"--properties: attrs[%d] is missing %q, which rule_type %q requires on every entry (expected keys %s; got %s). "+
 						"A common cause is reusing another rule's attrs shape — e.g. cellIs-style {compare_type,value} under a colorScale rule, which writes a color-less segment that breaks the sheet on open.",
 					i, key, ruleType, strings.Join(required, "+"), condAttrPresentKeys(entry))

@@ -17,6 +17,7 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/ipc"
 	"github.com/apache/arrow/go/v17/arrow/memory"
 
+	"github.com/larksuite/cli/errs"
 	"github.com/larksuite/cli/extension/fileio"
 	"github.com/larksuite/cli/internal/cmdutil"
 	"github.com/larksuite/cli/shortcuts/common"
@@ -59,7 +60,7 @@ const dataframeDefaultSheetName = valuesSheetName
 func parseDataframePayload(rctx *common.RuntimeContext) (*tablePayload, error) {
 	raw := strings.TrimSpace(rctx.Str("dataframe"))
 	if raw == "" {
-		return nil, common.FlagErrorf("--dataframe is required")
+		return nil, common.ValidationErrorf("--dataframe is required")
 	}
 	data, err := readDataframeBytes(rctx, raw)
 	if err != nil {
@@ -67,7 +68,7 @@ func parseDataframePayload(rctx *common.RuntimeContext) (*tablePayload, error) {
 	}
 	spec, err := decodeArrowToSheet(data, dataframeDefaultSheetName)
 	if err != nil {
-		return nil, common.FlagErrorf("--dataframe: %v", err)
+		return nil, common.ValidationErrorf("--dataframe: %v", err)
 	}
 	payload := &tablePayload{Sheets: []tableSheetSpec{spec}}
 	if err := payload.validate(); err != nil {
@@ -95,14 +96,14 @@ func readDataframeBytes(rctx *common.RuntimeContext, raw string) ([]byte, error)
 		}
 		io := rctx.IO()
 		if io == nil || io.In == nil {
-			return nil, common.FlagErrorf("--dataframe: stdin is not available")
+			return nil, common.ValidationErrorf("--dataframe: stdin is not available")
 		}
 		data, err := readAllBytes(io.In)
 		if err != nil {
-			return nil, common.FlagErrorf("--dataframe: read stdin: %v", err)
+			return nil, common.ValidationErrorf("--dataframe: read stdin: %v", err)
 		}
 		if len(data) == 0 {
-			return nil, common.FlagErrorf("--dataframe: stdin is empty")
+			return nil, common.ValidationErrorf("--dataframe: stdin is empty")
 		}
 		dataframeStdinCache = data
 		return data, nil
@@ -110,10 +111,10 @@ func readDataframeBytes(rctx *common.RuntimeContext, raw string) ([]byte, error)
 	path := strings.TrimPrefix(raw, "@")
 	data, err := cmdutil.ReadInputFile(rctx.FileIO(), path)
 	if err != nil {
-		return nil, common.FlagErrorf("--dataframe: %v", err)
+		return nil, common.ValidationErrorf("--dataframe: %v", err)
 	}
 	if len(data) == 0 {
-		return nil, common.FlagErrorf("--dataframe: file %q is empty", path)
+		return nil, common.ValidationErrorf("--dataframe: file %q is empty", path)
 	}
 	return data, nil
 }
@@ -129,13 +130,13 @@ func readAllBytes(r io.Reader) ([]byte, error) { return io.ReadAll(r) }
 func decodeArrowToSheet(data []byte, sheetName string) (tableSheetSpec, error) {
 	reader, err := ipc.NewFileReader(bytes.NewReader(data))
 	if err != nil {
-		return tableSheetSpec{}, fmt.Errorf("invalid Arrow IPC file (expected pandas df.to_feather output): %v", err)
+		return tableSheetSpec{}, fmt.Errorf("invalid Arrow IPC file (expected pandas df.to_feather output): %v", err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 	}
 	defer reader.Close()
 
 	schema := reader.Schema()
 	if schema == nil || schema.NumFields() == 0 {
-		return tableSheetSpec{}, fmt.Errorf("Arrow schema has no fields")
+		return tableSheetSpec{}, fmt.Errorf("Arrow schema has no fields") //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 	}
 
 	ncols := schema.NumFields()
@@ -145,15 +146,15 @@ func decodeArrowToSheet(data []byte, sheetName string) (tableSheetSpec, error) {
 		f := schema.Field(i)
 		name := f.Name
 		if strings.TrimSpace(name) == "" {
-			return tableSheetSpec{}, fmt.Errorf("column %d has empty name", i)
+			return tableSheetSpec{}, fmt.Errorf("column %d has empty name", i) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		if seen[name] {
-			return tableSheetSpec{}, fmt.Errorf("duplicate column name %q", name)
+			return tableSheetSpec{}, fmt.Errorf("duplicate column name %q", name) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		seen[name] = true
 		typ, format, err := arrowFieldToTypeFormat(f)
 		if err != nil {
-			return tableSheetSpec{}, fmt.Errorf("column %q: %v", name, err)
+			return tableSheetSpec{}, fmt.Errorf("column %q: %v", name, err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		cols[i] = tableColumnSpec{Name: name, Type: typ, Format: format}
 	}
@@ -162,7 +163,7 @@ func decodeArrowToSheet(data []byte, sheetName string) (tableSheetSpec, error) {
 	for b := 0; b < reader.NumRecords(); b++ {
 		rec, err := reader.RecordAt(b)
 		if err != nil {
-			return tableSheetSpec{}, fmt.Errorf("read record batch %d: %v", b, err)
+			return tableSheetSpec{}, fmt.Errorf("read record batch %d: %v", b, err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		batchRows, err := arrowRecordToRows(rec, cols)
 		rec.Release()
@@ -200,7 +201,7 @@ func arrowFieldToTypeFormat(f arrow.Field) (typ, format string, err error) {
 	if isArrowNumericType(f.Type) {
 		return "number", format, nil
 	}
-	return "", "", fmt.Errorf("unsupported Arrow type %s (want string/number/date/bool)", f.Type.Name())
+	return "", "", fmt.Errorf("unsupported Arrow type %s (want string/number/date/bool)", f.Type.Name()) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 }
 
 func isArrowNumericType(t arrow.DataType) bool {
@@ -220,7 +221,7 @@ func isArrowNumericType(t arrow.DataType) bool {
 // dates/timestamps, bool for booleans, string for strings.
 func arrowRecordToRows(rec arrow.Record, cols []tableColumnSpec) ([][]interface{}, error) {
 	if int(rec.NumCols()) != len(cols) {
-		return nil, fmt.Errorf("record has %d cols, schema declared %d", rec.NumCols(), len(cols))
+		return nil, fmt.Errorf("record has %d cols, schema declared %d", rec.NumCols(), len(cols)) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 	}
 	nrows := int(rec.NumRows())
 	rows := make([][]interface{}, nrows)
@@ -235,7 +236,7 @@ func arrowRecordToRows(rec arrow.Record, cols []tableColumnSpec) ([][]interface{
 			}
 			v, err := arrowCellValue(arr, r)
 			if err != nil {
-				return nil, fmt.Errorf("row %d column %q: %v", r, cols[c].Name, err)
+				return nil, fmt.Errorf("row %d column %q: %v", r, cols[c].Name, err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 			}
 			rows[r][c] = v
 		}
@@ -295,11 +296,11 @@ func arrowCellValue(arr arrow.Array, i int) (interface{}, error) {
 		case arrow.Nanosecond:
 			t = time.Unix(0, ts).UTC()
 		default:
-			return nil, fmt.Errorf("unsupported timestamp unit %v", unit)
+			return nil, fmt.Errorf("unsupported timestamp unit %v", unit) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		return t.Format("2006-01-02"), nil
 	}
-	return nil, fmt.Errorf("unsupported Arrow array %T", arr)
+	return nil, fmt.Errorf("unsupported Arrow array %T", arr) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 }
 
 // ─── --dataframe-out (Arrow IPC binary output, mirror of --dataframe) ──
@@ -319,7 +320,7 @@ func arrowCellValue(arr arrow.Array, i int) (interface{}, error) {
 func encodeSheetMapToArrowIPC(sheet map[string]interface{}) ([]byte, error) {
 	columns, _ := sheet["columns"].([]interface{})
 	if len(columns) == 0 {
-		return nil, fmt.Errorf("sheet has no columns")
+		return nil, fmt.Errorf("sheet has no columns") //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 	}
 	dtypes, _ := sheet["dtypes"].(map[string]interface{})
 	formats, _ := sheet["formats"].(map[string]interface{})
@@ -345,7 +346,7 @@ func encodeSheetMapToArrowIPC(sheet map[string]interface{}) ([]byte, error) {
 	for i, c := range columns {
 		name, _ := c.(string)
 		if name == "" {
-			return nil, fmt.Errorf("column %d has empty name", i)
+			return nil, fmt.Errorf("column %d has empty name", i) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		colNames[i] = name
 		dt, _ := dtypes[name].(string)
@@ -370,11 +371,11 @@ func encodeSheetMapToArrowIPC(sheet map[string]interface{}) ([]byte, error) {
 	defer rb.Release()
 	for r, row := range rawData {
 		if len(row) != ncols {
-			return nil, fmt.Errorf("row %d has %d cells, want %d", r, len(row), ncols)
+			return nil, fmt.Errorf("row %d has %d cells, want %d", r, len(row), ncols) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		for c := 0; c < ncols; c++ {
 			if err := appendArrowCell(rb.Field(c), colTypes[c], row[c]); err != nil {
-				return nil, fmt.Errorf("row %d column %q: %v", r, colNames[c], err)
+				return nil, fmt.Errorf("row %d column %q: %v", r, colNames[c], err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 			}
 		}
 	}
@@ -384,13 +385,13 @@ func encodeSheetMapToArrowIPC(sheet map[string]interface{}) ([]byte, error) {
 	var buf bytesWriterSeeker
 	w, err := ipc.NewFileWriter(&buf, ipc.WithSchema(schema), ipc.WithAllocator(mem))
 	if err != nil {
-		return nil, fmt.Errorf("ipc.NewFileWriter: %v", err)
+		return nil, fmt.Errorf("ipc.NewFileWriter: %v", err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 	}
 	if err := w.Write(rec); err != nil {
-		return nil, fmt.Errorf("write record: %v", err)
+		return nil, fmt.Errorf("write record: %v", err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 	}
 	if err := w.Close(); err != nil {
-		return nil, fmt.Errorf("close writer: %v", err)
+		return nil, fmt.Errorf("close writer: %v", err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 	}
 	return buf.buf, nil
 }
@@ -443,7 +444,7 @@ func appendArrowCell(b array.Builder, typ string, v interface{}) error {
 	case "string":
 		s, ok := v.(string)
 		if !ok {
-			return fmt.Errorf("string expects string value, got %T", v)
+			return fmt.Errorf("string expects string value, got %T", v) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		b.(*array.StringBuilder).Append(s)
 	case "number":
@@ -455,21 +456,21 @@ func appendArrowCell(b array.Builder, typ string, v interface{}) error {
 	case "date":
 		s, ok := v.(string)
 		if !ok {
-			return fmt.Errorf("date expects ISO yyyy-mm-dd string, got %T", v)
+			return fmt.Errorf("date expects ISO yyyy-mm-dd string, got %T", v) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		t, err := time.Parse("2006-01-02", strings.TrimSpace(s))
 		if err != nil {
-			return fmt.Errorf("date parse %q: %v", s, err)
+			return fmt.Errorf("date parse %q: %v", s, err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		b.(*array.Date32Builder).Append(arrow.Date32FromTime(t))
 	case "bool":
 		bb, ok := v.(bool)
 		if !ok {
-			return fmt.Errorf("bool expects bool, got %T", v)
+			return fmt.Errorf("bool expects bool, got %T", v) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		b.(*array.BooleanBuilder).Append(bb)
 	default:
-		return fmt.Errorf("unsupported internal type %q", typ)
+		return fmt.Errorf("unsupported internal type %q", typ) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 	}
 	return nil
 }
@@ -481,13 +482,13 @@ func arrowNumber(v interface{}) (float64, error) {
 	case json.Number:
 		f, err := n.Float64()
 		if err != nil {
-			return 0, fmt.Errorf("number parse %q: %v", n.String(), err)
+			return 0, fmt.Errorf("number parse %q: %v", n.String(), err) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 		}
 		return f, nil
 	case float64:
 		return n, nil
 	}
-	return 0, fmt.Errorf("number expects numeric value, got %T", v)
+	return 0, fmt.Errorf("number expects numeric value, got %T", v) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 }
 
 // bytesWriterSeeker is a 10-line in-memory io.WriteSeeker for
@@ -518,7 +519,7 @@ func (w *bytesWriterSeeker) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekEnd:
 		w.pos = int64(len(w.buf)) + offset
 	default:
-		return 0, fmt.Errorf("unknown whence %d", whence)
+		return 0, fmt.Errorf("unknown whence %d", whence) //nolint:forbidigo // intermediate error; the command layer wraps it into a typed --dataframe/--dataframe-out validation error
 	}
 	return w.pos, nil
 }
@@ -531,23 +532,23 @@ func writeDataframeOut(rctx *common.RuntimeContext, raw string, data []byte) err
 	if raw == "-" {
 		out := rctx.IO()
 		if out == nil || out.Out == nil {
-			return common.FlagErrorf("--dataframe-out: stdout is not available")
+			return common.ValidationErrorf("--dataframe-out: stdout is not available")
 		}
 		if _, err := out.Out.Write(data); err != nil {
-			return fmt.Errorf("--dataframe-out: write stdout: %v", err)
+			return errs.NewInternalError(errs.SubtypeFileIO, "--dataframe-out: write stdout").WithCause(err)
 		}
 		return nil
 	}
 	path := strings.TrimPrefix(raw, "@")
 	fio := rctx.FileIO()
 	if fio == nil {
-		return common.FlagErrorf("--dataframe-out: file output is not available in this context")
+		return common.ValidationErrorf("--dataframe-out: file output is not available in this context")
 	}
 	// FileIO.Save validates the path via SafeOutputPath (the same sandbox
 	// readDataframeBytes hits on the input side) and writes atomically, so we
 	// don't need an extra ValidatePath call here.
 	if _, err := fio.Save(path, fileio.SaveOptions{ContentLength: int64(len(data))}, bytes.NewReader(data)); err != nil {
-		return fmt.Errorf("--dataframe-out: write %q: %v", path, err)
+		return errs.NewInternalError(errs.SubtypeFileIO, "--dataframe-out: write %q", path).WithCause(err)
 	}
 	return nil
 }
