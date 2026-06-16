@@ -469,10 +469,12 @@ func configInitRun(opts *ConfigInitOptions) error {
 		return nil
 	}
 
-	// Non-terminal: cannot run interactive mode, guide user to the non-blocking
-	// two-step flow (preferred for agents) or the blocking --new.
+	// Non-terminal: the request is valid but the runtime state is wrong (no
+	// terminal for interactive mode) — a failed precondition, not a bad
+	// argument. Point the caller at the non-blocking two-step flow.
 	if !f.IOStreams.IsTerminal {
-		return errs.NewValidationError(errs.SubtypeInvalidArgument, "config init requires a terminal for interactive mode. To create a new app non-interactively, use the non-blocking two-step flow:\n  lark-cli config init --new --no-wait    # prints device_code + verification_url, returns immediately\n  lark-cli config init --device-code <code>   # run after the user finishes in the browser\nOr use the blocking form 'lark-cli config init --new' (run it in the background and read the verification URL from its output).")
+		return errs.NewValidationError(errs.SubtypeFailedPrecondition, "config init interactive mode requires a terminal").
+			WithHint("Create a new app non-interactively with the two-step flow: `lark-cli config init --new --no-wait` (prints device_code + verification_url, returns immediately), then `lark-cli config init --device-code <code>` after the user finishes in the browser. Or run `lark-cli config init --new` in a terminal.")
 	}
 
 	// Mode 5: Legacy interactive (readline fallback)

@@ -376,6 +376,12 @@ func TestResumeAppRegistration_CorruptCacheIsStorageError(t *testing.T) {
 	if !errors.As(err, &intErr) {
 		t.Fatalf("expected *errs.InternalError for unreadable cache, got %T: %v", err, err)
 	}
+	if p, ok := errs.ProblemOf(err); !ok || p.Subtype != errs.SubtypeStorage {
+		t.Fatalf("expected subtype=%q, got problem=%+v", errs.SubtypeStorage, p)
+	}
+	if errors.Unwrap(err) == nil {
+		t.Fatal("expected the underlying cache-read failure to be preserved as a cause")
+	}
 }
 
 func TestResumeAppRegistration_ConfigDrift(t *testing.T) {
