@@ -104,10 +104,13 @@ npx @larksuite/cli@latest install
 
 **Step 2 — Configure app credentials**
 
-> Run this command in the background. It will output an authorization URL — extract it and send it to the user. The command exits automatically after the user completes the setup in the browser.
+> Use the non-blocking two-step flow. Step A returns immediately with a `device_code` and `verification_url` (as JSON) — send the URL/QR to the user. After the user finishes creating the app in the browser, run Step B with that `device_code` to complete setup.
 
 ```bash
-lark-cli config init --new
+# A. initiate — returns immediately
+lark-cli config init --new --no-wait
+# B. complete — after the user confirms, using device_code from step A's output
+lark-cli config init --device-code <device_code>
 ```
 
 **Step 3 — Login**

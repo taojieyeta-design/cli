@@ -104,10 +104,13 @@ npx @larksuite/cli@latest install
 
 **第 2 步 — 配置应用凭证**
 
-> 在后台运行此命令，命令会输出一个授权链接，提取该链接并发送给用户，用户在浏览器中完成配置后命令会自动退出。
+> 使用非阻塞的两步式流程。第 A 步立即返回 `device_code` 和 `verification_url`（JSON 格式）——提取链接/二维码发给用户。用户在浏览器中完成应用创建后，用该 `device_code` 执行第 B 步完成配置。
 
 ```bash
-lark-cli config init --new
+# A. 发起 —— 立即返回
+lark-cli config init --new --no-wait
+# B. 完成 —— 用户确认后，用第 A 步输出里的 device_code
+lark-cli config init --device-code <device_code>
 ```
 
 **第 3 步 — 登录**
