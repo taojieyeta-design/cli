@@ -4,6 +4,8 @@
 package sheets
 
 import (
+	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -201,7 +203,7 @@ func TestObjectCRUDShortcuts_DryRun(t *testing.T) {
 			args: []string{
 				"--url", testURL, "--sheet-id", testSheetID,
 				"--rule-id", "ruleA",
-				"--properties", `{"attrs":[{"operator":"greaterThan","value":"100"}],"style":{"back_color":"#FFD7D7"}}`,
+				"--properties", `{"attrs":[{"compare_type":"greaterThan","value":"100"}],"style":{"back_color":"#FFD7D7"}}`,
 				"--rule-type", "cellIs",
 				"--ranges", `["A1:A100"]`,
 			},
@@ -213,7 +215,7 @@ func TestObjectCRUDShortcuts_DryRun(t *testing.T) {
 				"conditional_format_id": "ruleA",
 				"properties": map[string]interface{}{
 					"rule_type": "cellIs",
-					"attrs":     []interface{}{map[string]interface{}{"operator": "greaterThan", "value": "100"}},
+					"attrs":     []interface{}{map[string]interface{}{"compare_type": "greaterThan", "value": "100"}},
 					"style":     map[string]interface{}{"back_color": "#FFD7D7"},
 					"ranges":    []interface{}{"A1:A100"},
 				},
@@ -659,6 +661,182 @@ func TestSparklineUpdate_MissingSparklineID(t *testing.T) {
 	}
 	if !strings.Contains(combined, "+sparkline-list") {
 		t.Errorf("expected error to point at +sparkline-list; got=%s|%v", stderr, err)
+	}
+}
+
+// TestCondFormatAttrs_ShapeMatchesRuleType regresses the cross-field
+// guard that rejects attrs whose shape doesn't match the sibling
+// rule_type — the gap behind the "缺 color 的 colorScale 脏数据导致表格
+// 打不开" report: a colorScale rule fed cellIs-shaped attrs
+// ({compare_type,value}, no color) passed both the CLI's per-entry oneOf
+// schema check and the tool, writing a color-less segment that crashed
+// the frontend on open. The check covers create and update symmetrically.
+func TestCondFormatAttrs_ShapeMatchesRuleType(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		sc      common.Shortcut
+		args    []string
+		wantErr bool
+		wantMsg string // substring expected in the error, when wantErr
+	}{
+		{
+			name: "colorScale fed cellIs-shaped attrs (missing color) is rejected",
+			sc:   CondFormatCreate,
+			args: []string{
+				"--url", testURL, "--sheet-id", testSheetID,
+				"--rule-type", "colorScale", "--ranges", `["C1:C10"]`,
+				"--properties", `{"style":{},"attrs":[{"compare_type":"greaterThan","value":"0"},{"compare_type":"lessThan","value":"100"}]}`, "--dry-run",
+			},
+			wantErr: true,
+			wantMsg: "colorScale",
+		},
+		{
+			name: "colorScale with empty color string is rejected",
+			sc:   CondFormatCreate,
+			args: []string{
+				"--url", testURL, "--sheet-id", testSheetID,
+				"--rule-type", "colorScale", "--ranges", `["C1:C10"]`,
+				"--properties", `{"style":{},"attrs":[{"value_type":"minValue","color":""},{"value_type":"maxValue","color":"#FF0000"}]}`, "--dry-run",
+			},
+			wantErr: true,
+			wantMsg: `"color"`,
+		},
+		{
+			name: "well-formed colorScale attrs pass",
+			sc:   CondFormatCreate,
+			args: []string{
+				"--url", testURL, "--sheet-id", testSheetID,
+				"--rule-type", "colorScale", "--ranges", `["C1:C10"]`,
+				"--properties", `{"style":{},"attrs":[{"value_type":"minValue","color":"#FFFFFF"},{"value_type":"maxValue","color":"#FF0000"}]}`, "--dry-run",
+			},
+			wantErr: false,
+		},
+		{
+			name: "update path is guarded too (colorScale + cellIs attrs)",
+			sc:   CondFormatUpdate,
+			args: []string{
+				"--url", testURL, "--sheet-id", testSheetID, "--rule-id", "ruleA",
+				"--rule-type", "colorScale", "--ranges", `["C1:C10"]`,
+				"--properties", `{"style":{},"attrs":[{"compare_type":"greaterThan","value":"0"}]}`, "--dry-run",
+			},
+			wantErr: true,
+			wantMsg: "colorScale",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, stderr, err := runShortcutCapturingErr(t, tt.sc, tt.args)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected rejection; stderr=%s", stderr)
+				}
+				if combined := stderr + err.Error(); tt.wantMsg != "" && !strings.Contains(combined, tt.wantMsg) {
+					t.Errorf("expected error to mention %q; got=%s|%v", tt.wantMsg, stderr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected acceptance (dry-run); got err=%v stderr=%s", err, stderr)
+			}
+		})
+	}
+}
+
+// TestCondFormatAttrsRequired_MatchesSchemaOneOf guards against drift
+// between the hand-maintained condFormatAttrsRequired table (the source
+// validateCondFormatAttrs enforces) and the embedded flag-schemas.json
+// attrs oneOf (the authoritative shape contract synced from the spec
+// repo). The cross-field validator only works if its per-rule_type
+// required keys mirror the schema branches; if a future schema sync adds
+// or drops a required key on any branch without updating the table, the
+// CLI would silently under- or over-validate. They share no compile-time
+// link, so this test is the only thing pinning them together.
+//
+// The schema oneOf branches are NOT labeled by rule_type (that's the whole
+// point — rule_type is a sibling field the per-entry oneOf can't see), so
+// we can't match branch→rule_type. We instead compare the *multiset* of
+// required-key sets: every branch's required array must appear as some
+// table entry's value and vice versa. This catches any added/dropped
+// required key (real drift); it tolerates only a relabeling between two
+// branches that happen to share an identical required set (dataBar and
+// colorScale both require {color,value_type}), which is harmless here.
+func TestCondFormatAttrsRequired_MatchesSchemaOneOf(t *testing.T) {
+	t.Parallel()
+
+	// multiset key: required keys sorted + joined, so order within a
+	// branch's required array doesn't matter.
+	keyOf := func(req []string) string {
+		s := append([]string(nil), req...)
+		sort.Strings(s)
+		return strings.Join(s, "+")
+	}
+
+	tableMS := map[string]int{}
+	for _, req := range condFormatAttrsRequired {
+		tableMS[keyOf(req)]++
+	}
+
+	schemaMS := func(t *testing.T, command string) map[string]int {
+		idx, err := loadFlagSchemas()
+		if err != nil {
+			t.Fatalf("loadFlagSchemas: %v", err)
+		}
+		raw, ok := idx.Flags[command]["properties"]
+		if !ok {
+			t.Fatalf("no embedded schema for %s --properties", command)
+		}
+		var schema map[string]interface{}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatalf("unmarshal %s properties schema: %v", command, err)
+		}
+		dig := func(m map[string]interface{}, key string) map[string]interface{} {
+			next, _ := m[key].(map[string]interface{})
+			if next == nil {
+				t.Fatalf("%s: missing %q while navigating to attrs oneOf", command, key)
+			}
+			return next
+		}
+		attrs := dig(dig(schema, "properties"), "attrs")
+		items := dig(attrs, "items")
+		oneOf, ok := items["oneOf"].([]interface{})
+		if !ok || len(oneOf) == 0 {
+			t.Fatalf("%s: attrs.items.oneOf is missing or empty", command)
+		}
+		ms := map[string]int{}
+		for i, branchRaw := range oneOf {
+			branch, ok := branchRaw.(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s: oneOf[%d] is not an object", command, i)
+			}
+			reqRaw, _ := branch["required"].([]interface{})
+			req := make([]string, 0, len(reqRaw))
+			for _, r := range reqRaw {
+				if s, ok := r.(string); ok {
+					req = append(req, s)
+				}
+			}
+			ms[keyOf(req)]++
+		}
+		return ms
+	}
+
+	for _, command := range []string{"+cond-format-create", "+cond-format-update"} {
+		got := schemaMS(t, command)
+		if len(got) != len(tableMS) {
+			t.Errorf("%s: schema oneOf has %d distinct required-sets, table has %d", command, len(got), len(tableMS))
+		}
+		for k, n := range tableMS {
+			if got[k] != n {
+				t.Errorf("%s: required-set %q appears %d× in schema but %d× in condFormatAttrsRequired — table drifted from schema; re-sync the table", command, k, got[k], n)
+			}
+		}
+		for k, n := range got {
+			if tableMS[k] != n {
+				t.Errorf("%s: schema branch with required-set %q (×%d) has no matching condFormatAttrsRequired entry — add it to the table", command, k, n)
+			}
+		}
 	}
 }
 
