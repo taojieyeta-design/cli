@@ -44,7 +44,7 @@ const messages = {
     step4Fail:      "授权失败。运行以下命令重试: lark-cli auth login",
     done:           "安装完成！\n可以和你的 AI 工具（如 Claude Code、Trae等）说：\"飞书/Lark CLI 能帮我做什么？结合我的情况推荐一下从哪里开始\"",
     cancelled:      "安装已取消",
-    nonTtyHint:     "要完成配置，请在终端中运行：\n  lark-cli config init --new\n  lark-cli auth login",
+    nonTtyHint:     "要完成配置，请运行：\n  lark-cli config init --new --no-wait   （立即拿到 device_code 和 verification_url）\n  lark-cli config init --device-code <code>   （浏览器完成后再运行）\n  lark-cli auth login",
   },
   en: {
     setup:          "Setting up Feishu/Lark CLI...",
@@ -73,7 +73,7 @@ const messages = {
     step4Fail:      "Failed to authorize. Run lark-cli auth login to retry",
     done:           "You are all set!\nNow try asking your AI tool (Claude Code, Trae, etc.): \"What can Feishu/Lark CLI help me with, and where should I start?\"",
     cancelled:      "Installation cancelled",
-    nonTtyHint:     "To complete setup, run interactively:\n  lark-cli config init --new\n  lark-cli auth login",
+    nonTtyHint:     "To complete setup, run:\n  lark-cli config init --new --no-wait   (returns device_code + verification_url immediately)\n  lark-cli config init --device-code <code>   (run after finishing in the browser)\n  lark-cli auth login",
   },
 };
 

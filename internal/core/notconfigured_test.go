@@ -39,6 +39,26 @@ func TestNotConfiguredError_Local(t *testing.T) {
 	}
 }
 
+// localInitHint is TTY-aware: a human at a terminal gets the blocking single
+// command (the QR renders there), while an AI agent / non-interactive caller
+// gets the non-blocking two-step flow (blocking would deadlock).
+func TestLocalInitHint_TTYAware(t *testing.T) {
+	saveAndRestoreWorkspace(t)
+	SetCurrentWorkspace(WorkspaceLocal)
+	orig := isStdinTerminal
+	t.Cleanup(func() { isStdinTerminal = orig })
+
+	isStdinTerminal = func() bool { return true }
+	if hint := localInitHint(); !strings.Contains(hint, "config init --new") || strings.Contains(hint, "--no-wait") {
+		t.Errorf("TTY hint should be the blocking `config init --new` without --no-wait; got %q", hint)
+	}
+
+	isStdinTerminal = func() bool { return false }
+	if hint := localInitHint(); !strings.Contains(hint, "--no-wait") || !strings.Contains(hint, "--device-code") {
+		t.Errorf("non-TTY hint should be the two-step --no-wait / --device-code flow; got %q", hint)
+	}
+}
+
 func TestNotConfiguredError_OpenClaw(t *testing.T) {
 	saveAndRestoreWorkspace(t)
 	SetCurrentWorkspace(WorkspaceOpenClaw)

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"golang.org/x/term"
 )
 
 // LoadOrNotConfigured wraps LoadMultiAppConfig with the standard "not yet
@@ -43,10 +45,16 @@ func LoadOrNotConfigured() (*MultiAppConfig, error) {
 }
 
 const (
-	// localInitHint is the canonical "you're in a regular terminal, run
-	// init" guidance — shared by NotConfiguredError and NoActiveProfileError
-	// so the same session can't show two different recommended commands.
-	localInitHint = "run `lark-cli config init --new` in the background. It blocks and outputs a verification URL — retrieve the URL and open it in a browser to complete setup."
+	// localInitHintTTY is shown to a human at an interactive terminal, where the
+	// blocking `config init --new` is simplest — the QR renders right there and
+	// the human can scan it while the command waits.
+	localInitHintTTY = "run `lark-cli config init --new` in the background. It blocks and outputs a verification URL — retrieve the URL and open it in a browser to complete setup."
+
+	// localInitHintNonTTY is shown to AI agents / piped callers, where the
+	// blocking flow would deadlock (the agent can't surface the URL until the
+	// command returns, but it won't return until the user scans). Point them at
+	// the non-blocking two-step flow instead.
+	localInitHintNonTTY = "run `lark-cli config init --new --no-wait` to get a device_code and verification_url immediately, then run `lark-cli config init --device-code <code>` after setup is completed in the browser."
 
 	// agentBindHint is the canonical "you're in an Agent workspace, see
 	// the binding workflow" guidance. Always points at --help (never a
@@ -54,6 +62,21 @@ const (
 	// discipline (identity preset, user opt-in) before acting.
 	agentBindHint = "read `lark-cli config bind --help`, then ask the user to confirm intent and identity preset (bot-only or user-default); only after both are confirmed, run `lark-cli config bind`"
 )
+
+// isStdinTerminal reports whether stdin is an interactive terminal. It is a var
+// so tests can exercise both the TTY and non-TTY hint branches.
+var isStdinTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+
+// localInitHint returns the workspace-local "run init" guidance, choosing the
+// blocking single command for an interactive terminal (a human can see the QR)
+// and the non-blocking two-step flow for AI agents / non-interactive callers
+// (where blocking would deadlock).
+func localInitHint() string {
+	if isStdinTerminal() {
+		return localInitHintTTY
+	}
+	return localInitHintNonTTY
+}
 
 // NotConfiguredError returns the canonical "not configured" error, with a
 // hint that depends on the active workspace:
@@ -74,7 +97,7 @@ func NotConfiguredError() error {
 			Code:    3,
 			Type:    "config",
 			Message: "not configured",
-			Hint:    localInitHint,
+			Hint:    localInitHint(),
 		}
 	}
 	return &ConfigError{
@@ -108,7 +131,7 @@ func NoActiveProfileError() error {
 			Code:    3,
 			Type:    "config",
 			Message: "no active profile",
-			Hint:    localInitHint,
+			Hint:    localInitHint(),
 		}
 	}
 	return &ConfigError{
