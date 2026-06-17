@@ -1147,7 +1147,8 @@ func resolveInputFlags(rctx *RuntimeContext, flags []Flag) error {
 			}
 			if stdinUsed {
 				return ValidationErrorf("--%s: stdin (-) can only be used by one flag", fl.Name).
-					WithParam("--" + fl.Name)
+					WithParam("--"+fl.Name).
+					WithHint("a process has a single stdin, so only one flag per call may use '-'; pass the others as @file (e.g. --%s @/path/to/file)", fl.Name)
 			}
 			stdinUsed = true
 			data, err := io.ReadAll(rctx.IO().In)
@@ -1262,7 +1263,13 @@ func registerShortcutFlagsWithContext(ctx context.Context, cmd *cobra.Command, f
 				hints = append(hints, "@file")
 			}
 			if slices.Contains(fl.Input, Stdin) {
-				hints = append(hints, "- for stdin")
+				// "- reads stdin" intentionally avoids implying each flag has
+				// its own stdin: a process has a single stdin, so at most one
+				// flag per call may use "-" (the rest must use @file). The old
+				// per-flag "- for stdin" wording led AI agents to write
+				// `--a - <x --b - <y`, where the second `<` silently clobbers
+				// the first and `--a` reads the wrong payload.
+				hints = append(hints, "- reads stdin (one flag per call; use @file for others)")
 			}
 			desc += " (supports " + strings.Join(hints, ", ") + ")"
 		}

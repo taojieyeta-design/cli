@@ -216,9 +216,14 @@ func TestResolveInputFlags_DuplicateStdin(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for duplicate stdin usage")
 	}
-	assertValidationParam(t, err, "--b")
+	vErr := assertValidationParam(t, err, "--b")
 	if !strings.Contains(err.Error(), "stdin (-) can only be used by one flag") {
 		t.Errorf("unexpected error: %v", err)
+	}
+	// The hint must steer an AI agent to the fix (@file for the extra flags),
+	// since `--a - <x --b - <y` is the exact misuse this guards against.
+	if !strings.Contains(vErr.Hint, "@file") {
+		t.Errorf("hint %q should mention @file as the fix", vErr.Hint)
 	}
 }
 
