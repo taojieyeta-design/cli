@@ -454,7 +454,7 @@
                       "type": "object"
                     },
                     "link": {
-                      "description": "超链接地址（仅 type='link' 时必填）",
+                      "description": "超链接地址（type='link' 时必填）；@文档 mention（mention_type 非 0）时也必填，传文档 URL（如搜索结果里的文档链接），否则卡片不可点。@人（mention_type=0）不需要传",
                       "type": "string"
                     },
                     "mention_token": {
