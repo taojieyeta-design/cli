@@ -160,6 +160,9 @@ func buildInternal(ctx context.Context, inv cmdutil.InvocationContext, opts ...B
 	shortcuts.RegisterShortcutsWithContext(ctx, rootCmd, f)
 
 	installUnknownSubcommandGuard(rootCmd)
+	// Bare `lark-cli` in an interactive terminal offers an interactive upgrade
+	// before printing help; non-bare invocations and non-TTY are unaffected.
+	installRootUpgradePrompt(f, rootCmd)
 
 	if mode := f.ResolveStrictMode(ctx); mode.IsActive() {
 		pruneForStrictMode(rootCmd, mode)
