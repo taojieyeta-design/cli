@@ -65,7 +65,13 @@ const (
 
 // isStdinTerminal reports whether stdin is an interactive terminal. It is a var
 // so tests can exercise both the TTY and non-TTY hint branches.
-var isStdinTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+var isStdinTerminal = func() bool {
+	// internal/core sits below the IOStreams layer (cmdutil imports core, not
+	// the reverse), so there is no IOStreams to consult here. Probe stdin
+	// directly — a read-only TTY check used solely to pick the right
+	// not-configured hint.
+	return term.IsTerminal(int(os.Stdin.Fd())) //nolint:forbidigo // no IOStreams in core; read-only TTY probe for hint selection
+}
 
 // localInitHint returns the workspace-local "run init" guidance, choosing the
 // blocking single command for an interactive terminal (a human can see the QR)
